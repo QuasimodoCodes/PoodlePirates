@@ -1,0 +1,104 @@
+{
+  "project": "Astar Island — Viking Civilisation Prediction",
+  "constraints": {
+    "TOTAL_QUERIES": 50,
+    "NUM_SEEDS": 5,
+    "QUERIES_PER_SEED": 10,
+    "MAP_WIDTH": 40,
+    "MAP_HEIGHT": 40,
+    "VIEWPORT_MAX": 15,
+    "NUM_TERRAIN_CLASSES": 6,
+    "SIMULATION_YEARS": 50,
+    "TILES_TO_COVER_MAP": 9,
+    "SCORING_METRIC": "entropy-weighted KL divergence (lower is better)"
+  },
+  "git_rules": {
+    "working_branch": "victor",
+    "commit_after_each_verified_step": true,
+    "push_to_remote": false,
+    "merge_to_main": "ONLY when score is confirmed better than previous best — ask user before merging"
+  },
+  "steps": [
+    {
+      "step_number": 1,
+      "description": "Project scaffold — config.py (single source of truth for ALL parameters), requirements.txt, __init__.py files, folder structure.",
+      "status": "complete",
+      "files": ["config.py", "requirements.txt", "src/**/__init__.py", "data/observations/.gitkeep", "data/predictions/.gitkeep"]
+    },
+    {
+      "step_number": 2,
+      "description": "Read the full API docs — paste contents of 'Simulation Mechanics', 'API Endpoints', 'Scoring', and 'Quickstart' pages from docs.ainm.no into PROBLEM.md. Fill in ALL open questions: 6 terrain types, exact request/response format, auth method, coordinate system. No code until this is done.",
+      "status": "pending",
+      "files": ["PROBLEM.md"],
+      "why": "Building on wrong assumptions burns queries we can never get back. Know the format before writing a single line of client code.",
+      "deliverable": "PROBLEM.md fully filled in — zero open questions remaining"
+    },
+    {
+      "step_number": 3,
+      "description": "API Discovery script — scripts/api_discovery.py: authenticate with token, fire exactly ONE /simulate call with a minimal viewport, print the raw JSON response. Verify it matches the docs. Zero logic, just a probe.",
+      "status": "pending",
+      "files": ["scripts/api_discovery.py"],
+      "budget_impact": "Costs 1 query — confirm you have the token set before running",
+      "key_question": "Does the real response match the documented format?"
+    },
+    {
+      "step_number": 4,
+      "description": "API Client — src/api/client.py + src/api/models.py: typed wrapper with methods simulate(seed, x, y, width, height) and submit(seed, tensor). Handles auth headers, HTTP errors. No raw requests calls anywhere else in the codebase.",
+      "status": "pending",
+      "files": ["src/api/client.py", "src/api/models.py"]
+    },
+    {
+      "step_number": 5,
+      "description": "Budget Manager — src/observation/budget_manager.py: persists query count to data/budget.json. HARD STOP at TOTAL_QUERIES=50 — raises BudgetExhaustedError before any API call is made. Every simulate() call MUST pass through this gate.",
+      "status": "pending",
+      "files": ["src/observation/budget_manager.py"],
+      "critical": "This is the safety net — blowing the budget cannot be undone"
+    },
+    {
+      "step_number": 6,
+      "description": "Query Planner — src/observation/query_planner.py: generate list of (seed, x, y, w, h) for 9 non-overlapping tiles covering full 40x40 map per seed (45 queries), plus 5 spare queries held for re-querying uncertain areas after initial scan.",
+      "status": "pending",
+      "files": ["src/observation/query_planner.py"],
+      "math": "ceil(40/15)=3 → 3x3=9 tiles at x=[0,15,30], y=[0,15,30]; last column/row tiles are 10 cells wide"
+    },
+    {
+      "step_number": 7,
+      "description": "Observation Runner — src/observation/runner.py: executes query plan, calls BudgetManager then APIClient per query, saves raw response JSON to data/observations/seed{seed}_x{x}_y{y}.json immediately after each call. Never batch — save after every single query.",
+      "status": "pending",
+      "files": ["src/observation/runner.py"],
+      "important": "Save after EVERY query — if script crashes at query 43, we keep all 43"
+    },
+    {
+      "step_number": 8,
+      "description": "Data Analysis — scripts/analyze_observations.py: load all saved observations, print terrain frequency per type, print ASCII coverage map (observed vs unobserved cells), count how many times each cell was seen across seeds.",
+      "status": "pending",
+      "files": ["scripts/analyze_observations.py"]
+    },
+    {
+      "step_number": 9,
+      "description": "Terrain Estimator — src/model/terrain_estimator.py: per-cell probability distributions. Observed cells: use empirical frequency across sim seeds (stochastic samples). Unobserved cells: use global observed frequency as prior — NOT uniform, NOT zero.",
+      "status": "pending",
+      "files": ["src/model/terrain_estimator.py"],
+      "scoring_note": "Confident wrong answer = worst penalty. Never output [1,0,0,0,0,0] unless cell was observed 100% same terrain across all queries."
+    },
+    {
+      "step_number": 10,
+      "description": "Tensor Builder — src/prediction/tensor_builder.py: assembles W×H×6 numpy array from terrain estimator output. Hard assertion: each row sums to 1.0 ± epsilon. Saves to data/predictions/seed{seed}_tensor.npy and .json.",
+      "status": "pending",
+      "files": ["src/prediction/tensor_builder.py"]
+    },
+    {
+      "step_number": 11,
+      "description": "main.py — full pipeline orchestration: load config → plan queries → run observations → estimate terrain → build tensors → submit all 5 seeds. Each stage is a clearly named function. Prints budget remaining after each query.",
+      "status": "pending",
+      "files": ["main.py"]
+    },
+    {
+      "step_number": 12,
+      "description": "Submit & Score — post all 5 seed predictions, record score + timestamp in data/scores.json. Compare to previous best. If better: create PR victor → main and ask user to confirm merge. If not better: go back to step 9 and improve model.",
+      "status": "pending",
+      "files": ["data/scores.json"],
+      "branch_rule": "No push to remote. No merge to main. Only create a PR when score is verified better."
+    }
+  ]
+}
