@@ -6,7 +6,7 @@ Observe a black-box Norse civilisation simulator through a limited viewport and 
 
 The simulator runs a procedurally generated Norse world for **50 years** — settlements grow, factions clash, trade routes form, alliances shift, forests reclaim ruins, and harsh winters reshape entire civilisations.
 
-**Goal:** Observe through a viewport, learn the world's hidden rules, and predict the probability distribution of terrain types across the entire map.
+**Goal:** Predict the **probability distribution** of terrain types across the entire map for each of 5 seeds.
 
 - **Task type:** Observation + probabilistic prediction
 - **Platform:** app.ainm.no
@@ -14,153 +14,241 @@ The simulator runs a procedurally generated Norse world for **50 years** — set
 
 ---
 
-## How It Works
+## Hard Constraints ← KNOW THESE BY HEART
 
-1. A round starts — admin creates a round with a fixed map, hidden parameters, and **5 random seeds**
-2. **Observe** — call `POST /astar-island/simulate` with viewport coordinates to observe one stochastic run through a window (max **15×15 cells**). You have **50 queries total** per round, shared across all 5 seeds.
-3. **Learn** — analyze viewport observations to understand the forces governing the world
-4. **Predict** — build probability distributions for the full map
-5. **Submit** — for each seed, submit a **H×W×6 probability tensor** (terrain type probabilities per cell)
-6. **Score** — prediction is compared to ground truth using **entropy-weighted KL divergence**
-
----
-
-## Key Constraints
-
-| Parameter | Value |
-|---|---|
-| **TOTAL_QUERIES** | **50** — shared across ALL 5 seeds |
-| **QUERIES_PER_SEED** | ~10 (50 / 5) |
-| **MAP_SIZE** | 40×40 = 1,600 cells |
-| **VIEWPORT_MAX** | 15×15 = 225 cells per query |
-| **TILES_TO_COVER_MAP** | 9 (3×3 grid of 15×15 tiles) |
-| **SPARE_QUERIES** | 5 (after full coverage of all seeds: 50 - 5×9 = 5) |
-| **NUM_SEEDS** | 5 |
-| **NUM_TERRAIN_CLASSES** | 6 |
-| **SIMULATION_YEARS** | 50 |
-
----
-
-## Terrain Classes (6 total) ✅ CONFIRMED
-
-| Index | Terrain Type | Notes |
+| Parameter | Value | Notes |
 |---|---|---|
-| 0 | Empty | Open land, no activity |
-| 1 | Settlement | Viking settlement present |
-| 2 | Port | Coastal settlement with port |
-| 3 | Ruin | Destroyed/abandoned settlement |
-| 4 | Forest | Forest has grown or reclaimed area |
+| **TOTAL_QUERIES** | **50** | Shared across ALL 5 seeds — cannot be undone |
+| **QUERIES_PER_SEED** | ~10 | 50 / 5 — use strategically |
+| **MAP_SIZE** | **40×40 = 1,600 cells** | Confirmed from API |
+| **VIEWPORT_MAX** | **15×15 = 225 cells** | Min width/height is 5 |
+| **TILES_TO_COVER_MAP** | 9 | ceil(40/15)=3 → 3×3 grid |
+| **SPARE_QUERIES** | 5 | After 9 tiles × 5 seeds = 45 |
+| **NUM_SEEDS** | 5 | seed_index 0–4 |
+| **NUM_TERRAIN_CLASSES** | 6 | classes 0–5 (prediction layer) |
+| **SIMULATION_YEARS** | 50 | Years per sim run |
+| **RATE_LIMIT_SIMULATE** | 5 req/sec | 429 if exceeded |
+| **RATE_LIMIT_SUBMIT** | 2 req/sec | 429 if exceeded |
+
+---
+
+## Terrain System
+
+### Internal Grid Codes (what the API returns in `grid`)
+
+| Code | Terrain | Prediction Class | Notes |
+|---|---|---|---|
+| 10 | Ocean | 0 (Empty) | **STATIC** — impassable water, borders map |
+| 11 | Plains | 0 (Empty) | Flat land, buildable |
+| 0 | Empty | 0 (Empty) | Generic empty cell |
+| 1 | Settlement | 1 | Active Norse settlement |
+| 2 | Port | 2 | Coastal settlement with harbour |
+| 3 | Ruin | 3 | Collapsed settlement |
+| 4 | Forest | 4 | Provides food to adjacent settlements |
+| 5 | Mountain | 5 | **STATIC** — impassable terrain, never changes |
+
+### Prediction Classes (what we submit)
+
+| Index | Class | Description |
+|---|---|---|
+| 0 | Empty | Ocean (10), Plains (11), or Empty (0) all map here |
+| 1 | Settlement | Active settlement |
+| 2 | Port | Coastal settlement with harbour |
+| 3 | Ruin | Collapsed settlement |
+| 4 | Forest | Forest terrain |
 | 5 | Mountain | Mountain terrain |
 
 ---
 
-## ⚠️ CRITICAL SCORING WARNING
+## 🔑 KEY STRATEGIC INSIGHTS
 
-**Never assign `0.0` probability to any class.**
+### 1. Static Cells = Free High-Confidence Predictions
+- **Mountains (code 5)**: Never change. Initial state = final state. Predict class 5 with ~0.99.
+- **Ocean (code 10)**: Never change. Predict class 0 with ~0.99.
+- These can be read from `initial_states` at **zero query cost**.
 
-If the ground truth has any non-zero probability for a class you marked as `0.0`, KL divergence becomes **infinite** and your score for that cell is destroyed.
+### 2. Initial States Are Free
+`GET /rounds/{round_id}` returns the full initial grid + settlement positions for all 5 seeds. No queries used.
+- Identify all Mountain + Ocean cells immediately → near-certain predictions for ~30-50% of map
+- Identify all initial settlement positions → focus query budget here
 
-**Rule:** Always apply a minimum probability floor (e.g. `0.01`) to all classes, then renormalize so the row sums to `1.0`.
+### 3. Ground Truth Is Itself a Probability Distribution
+The ground truth (used for scoring) is computed from **Monte Carlo simulations** — it's a H×W×6 tensor of probabilities, not a deterministic outcome.
+- For static cells (Mountain, Ocean): ground truth is near [0,0,0,0,0,1] or [1,0,0,0,0,0]
+- For dynamic cells: ground truth captures the full stochastic distribution
+- **Our queries are Monte Carlo samples** — each query gives one stochastic outcome
 
----
+### 4. Budget Is Checkable Via API
+`GET /budget` returns `queries_used` and `queries_max`. No need to track locally from scratch — always sync with API before querying.
 
-## Scoring
-
-Metric: **Entropy-weighted KL divergence** — lower is better.
-
-- Higher-uncertainty cells (high entropy ground truth) are weighted **more**
-- Near-deterministic cells contribute less to the score
-- A **uniform prediction** (`[1/6, 1/6, 1/6, 1/6, 1/6, 1/6]`) scores approximately **1–5**
-- Confident wrong answers are penalized most severely → **never be overconfident**
-
----
-
-## 🔑 KEY INSIGHT: Initial States Are Free
-
-`GET /astar-island/rounds/{round_id}` returns **`initial_states`** for every seed at zero query cost.
-
-Each initial state includes:
-- `grid`: full `H×W` terrain grid at year 0
-- `settlements`: list of `{x, y, has_port, alive}` for every settlement
-
-**This means we know the starting map for free.** Our 50 queries should focus on understanding HOW the simulation transforms the initial state — not discovering what's there at year 0.
+### 5. Simulation Has Settlement Full Stats (via queries)
+The `simulate` response includes settlement `population`, `food`, `wealth`, `defense`, `has_port`, `owner_id` — rich signal beyond just terrain type.
 
 ---
 
-## API Reference ✅ CONFIRMED
+## ⚠️ CRITICAL SCORING RULES
 
-### Authentication
-Log in at app.ainm.no, grab `access_token` JWT from browser cookies.
+### Exact Score Formula
+```
+KL(p || q)    = Σᵢ pᵢ × log(pᵢ / qᵢ)       # per cell; p=ground truth, q=our prediction
+entropy(cell) = -Σᵢ pᵢ × log(pᵢ)            # cell weight
 
+weighted_kl   = Σ_cells [entropy(cell) × KL(cell)]
+                ──────────────────────────────────
+                      Σ_cells entropy(cell)
+
+score = max(0, min(100, 100 × exp(-3 × weighted_kl)))
+```
+- **100** = perfect match. **0** = terrible.
+- Uniform `[1/6 × 6]` → score ≈ **1–5** out of 100.
+- Static cells (Mountain, Ocean) have ~zero entropy → **excluded from scoring weight**.
+- High-uncertainty dynamic cells are weighted **most heavily**.
+
+### Never Assign 0.0 Probability
+If ground truth `pᵢ > 0` but your prediction `qᵢ = 0` → `log(pᵢ / 0) = ∞` → **that cell = infinity KL**.
+
+**Always apply floor BEFORE submitting:**
 ```python
-session = requests.Session()
-session.headers["Authorization"] = "Bearer YOUR_JWT_TOKEN"
+prediction = np.maximum(prediction, 0.01)
+prediction = prediction / prediction.sum(axis=-1, keepdims=True)
 ```
 
-### Get Active Round
-```
-GET /astar-island/rounds
-```
-Returns list of rounds. Find the one where `status == "active"`.
+### Always Submit All 5 Seeds
+Missing seed = **score 0** for that seed. Even a uniform prediction beats 0.
+Round score = average of all 5 seed scores.
 
-### Get Round Details (FREE — costs no queries)
-```
-GET /astar-island/rounds/{round_id}
-```
-Returns:
-- `map_width`, `map_height` (confirmed 40×40)
-- `seeds_count` (confirmed 5)
-- `initial_states[i]["grid"]` — full H×W terrain grid at year 0
-- `initial_states[i]["settlements"]` — list of `{x, y, has_port, alive}`
-
-### Simulate (Observe) — costs 1 query
-```
-POST /astar-island/simulate
-{
-  "round_id": "<round_id>",
-  "seed_index": 0,          ← 0 to 4
-  "viewport_x": 10,
-  "viewport_y": 5,
-  "viewport_w": 15,          ← max 15
-  "viewport_h": 15           ← max 15
-}
-```
-Returns:
-- `grid`: H×W terrain after 50 years of simulation (the viewported window)
-- `settlements`: settlements in viewport with full stats
-- `viewport`: `{x, y, w, h}` (echo of your request)
-
-### Submit Prediction
-```
-POST /astar-island/submit
-{
-  "round_id": "<round_id>",
-  "seed_index": 0,
-  "prediction": [[[p0,p1,p2,p3,p4,p5], ...], ...]   ← H×W×6, sums to 1.0 per cell
-}
-```
+### Prediction Format Constraints
+- `prediction[y][x]` = 6 floats summing to `1.0 ± 0.01`
+- All values must be non-negative
+- Shape: `H × W × 6` = `40 × 40 × 6`
 
 ---
 
-## Strategy Notes
+## Simulation Mechanics
 
-- **Initial state is free** → fetch `initial_states` first, use as prior for every seed
-- **50 queries / 5 seeds = ~10 per seed** — 9 for full map scan, 1 spare per seed
-- 9 non-overlapping 15×15 tiles cover the full 40×40 map (3×3 grid)
-- Cross-seed observations reveal stochasticity — same cell seen multiple times = probability estimate
-- **Minimum probability floor**: apply `0.01` floor to all 6 classes, then renormalize
-- Initial terrain + observed final terrain = training signal for extrapolating unobserved cells
+### Phases (each year, in order)
+1. **Growth** — settlements produce food from adjacent terrain; grow population; develop ports; found new settlements on nearby land
+2. **Conflict** — settlements raid each other; longships extend raiding range; desperate settlements raid more aggressively
+3. **Trade** — ports within range trade if not at war; generates wealth + food; diffuses technology
+4. **Winter** — all settlements lose food; collapse from starvation/raids/harsh winter → become Ruins
+5. **Environment** — ruins reclaimed by thriving neighbours (possibly as Port); unclaimed ruins → forest or plains
+
+### Settlement Properties (visible through queries)
+`population`, `food`, `wealth`, `defense`, `tech_level`, `has_port`, `longship`, `owner_id (faction)`
+
+Initial states only expose: `position` + `has_port` + `alive`. Internal stats require simulation queries.
+
+### What Can Change
+
+| Initial Terrain | Can Become |
+|---|---|
+| Settlement (1) | Settlement, Port, Ruin, possibly Forest/Empty if abandoned |
+| Port (2) | Port, Settlement, Ruin |
+| Forest (4) | Forest (mostly stable), can reclaim Ruins |
+| Plains/Empty (0/11) | Empty, Settlement (if expansion), Forest |
+| Mountain (5) | **Always Mountain** |
+| Ocean (10) | **Always Ocean** |
+| Ruin (3) | Ruin, Settlement, Port (if rebuilt), Forest/Empty (if abandoned) |
+
+---
+
+## API Reference
+
+### Auth
+```
+Authorization: Bearer <JWT from app.ainm.no browser cookies>
+```
+
+### Endpoints
+
+| Method | Path | Cost | Description |
+|---|---|---|---|
+| GET | `/rounds` | Free | List all rounds |
+| GET | `/rounds/{round_id}` | **Free** | Full round details + **initial states for all seeds** |
+| GET | `/budget` | Free | Check queries_used / queries_max |
+| POST | `/simulate` | **1 query** | Observe viewport for one seed |
+| POST | `/submit` | Free | Submit H×W×6 prediction tensor |
+| GET | `/my-rounds` | Free | Your scores, rank, budget per round |
+| GET | `/my-predictions/{round_id}` | Free | Your predictions (argmax + confidence grids) |
+| GET | `/analysis/{round_id}/{seed_index}` | Free | Post-round: your prediction vs ground truth |
+| GET | `/leaderboard` | Free | Public leaderboard |
+
+### GET /rounds/{round_id} Response
+```json
+{
+  "map_width": 40, "map_height": 40, "seeds_count": 5,
+  "initial_states": [
+    {
+      "grid": [[10, 10, 0, ...], ...],
+      "settlements": [{"x": 5, "y": 12, "has_port": true, "alive": true}]
+    }
+  ]
+}
+```
+
+### GET /budget Response
+```json
+{"round_id": "uuid", "queries_used": 23, "queries_max": 50, "active": true}
+```
+
+### POST /simulate Request
+```json
+{
+  "round_id": "uuid",
+  "seed_index": 0,
+  "viewport_x": 0, "viewport_y": 0,
+  "viewport_w": 15, "viewport_h": 15
+}
+```
+
+### POST /simulate Response
+```json
+{
+  "grid": [[4, 11, 1, ...], ...],
+  "settlements": [{"x": 12, "y": 7, "population": 2.8, "food": 0.4,
+                   "wealth": 0.7, "defense": 0.6, "has_port": true,
+                   "alive": true, "owner_id": 3}],
+  "viewport": {"x": 0, "y": 0, "w": 15, "h": 15},
+  "width": 40, "height": 40,
+  "queries_used": 24, "queries_max": 50
+}
+```
+
+### POST /submit Request
+```json
+{
+  "round_id": "uuid",
+  "seed_index": 0,
+  "prediction": [[[0.85, 0.05, 0.02, 0.03, 0.03, 0.02], ...], ...]
+}
+```
+Resubmitting overwrites the previous prediction. Only last submission counts.
+
+### GET /analysis/{round_id}/{seed_index} — POST-ROUND ONLY
+```json
+{
+  "prediction": [[[...], ...], ...],
+  "ground_truth": [[[...], ...], ...],
+  "score": 78.2,
+  "initial_grid": [[10, 10, ...], ...]
+}
+```
+Ground truth is the Monte Carlo H×W×6 probability distribution.
+
+### Error Codes
+| Code | Meaning |
+|---|---|
+| 400 | Round not active / invalid seed_index / round not completed (for analysis) |
+| 403 | Not on a team |
+| 404 | Round not found |
+| 429 | Budget exhausted OR rate limit hit |
 
 ---
 
 ## Open Questions
 
-- [x] What are the 6 terrain types? **→ Empty, Settlement, Port, Ruin, Forest, Mountain**
-- [x] What is the full API endpoint spec? **→ documented above**
-- [x] What does the viewport response look like? **→ {grid, settlements, viewport}**
-- [x] What's the map size? **→ always 40×40**
-- [x] What is the auth method? **→ Bearer JWT from browser cookies**
-- [ ] What hidden parameters govern simulation dynamics? (discover via observation)
-- [ ] How frequently do terrain transitions occur? (e.g., Settlement → Ruin frequency)
-- [ ] Does initial settlement `has_port` always become terrain class 2 (Port)?
-- [ ] Which terrain types are deterministic vs stochastic at final state?
+- [ ] What hidden parameters govern simulation dynamics? (expansion rate, conflict rate, winter severity?)
+- [ ] How frequently do terrain transitions occur? (quantify Settlement → Ruin rate)
+- [ ] Which areas of the map are most dynamic (high entropy in ground truth)?
+- [ ] Can we exploit `owner_id` faction data to predict future conflict zones?
+- [ ] Does initial `has_port=True` almost always remain Port at year 50?

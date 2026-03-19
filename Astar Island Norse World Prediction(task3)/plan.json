@@ -10,7 +10,10 @@
     "NUM_TERRAIN_CLASSES": 6,
     "SIMULATION_YEARS": 50,
     "TILES_TO_COVER_MAP": 9,
-    "SCORING_METRIC": "entropy-weighted KL divergence (lower is better)"
+    "SPARE_QUERIES": 5,
+    "RATE_LIMIT_SIMULATE": "5 req/sec",
+    "SCORING": "score = max(0, min(100, 100 × exp(-3 × weighted_kl)))",
+    "UNIFORM_BASELINE_SCORE": "~1-5 out of 100"
   },
   "git_rules": {
     "working_branch": "victor",
@@ -18,87 +21,107 @@
     "push_to_remote": false,
     "merge_to_main": "ONLY when score is confirmed better than previous best — ask user before merging"
   },
+  "key_insights": {
+    "static_cells": "Mountain (5) and Ocean (10) NEVER change — predict with ~0.99 confidence using initial_states (free)",
+    "initial_states_free": "GET /rounds/{id} gives full initial grid + settlements for all 5 seeds at zero query cost",
+    "ground_truth_is_distribution": "Ground truth is itself a H×W×6 probability tensor from Monte Carlo — we're estimating a distribution not a single outcome",
+    "zero_probability_kills_score": "qᵢ=0 when pᵢ>0 → KL=infinity → always apply 0.01 floor then renormalize",
+    "static_cells_excluded": "Ocean and Mountain have ~zero entropy → excluded from scoring weight — focus budget on dynamic cells",
+    "budget_api": "GET /budget returns queries_used — sync with API before each query"
+  },
   "steps": [
     {
       "step_number": 1,
-      "description": "Project scaffold — config.py (single source of truth for ALL parameters), requirements.txt, __init__.py files, folder structure.",
+      "description": "Project scaffold — config.py, requirements.txt, __init__.py files, folder structure.",
       "status": "complete",
-      "files": ["config.py", "requirements.txt", "src/**/__init__.py", "data/observations/.gitkeep", "data/predictions/.gitkeep"]
+      "files": ["config.py", "requirements.txt", "src/**/__init__.py", "data/", "scripts/"]
     },
     {
       "step_number": 2,
-      "description": "Read the full API docs — paste contents of 'Simulation Mechanics', 'API Endpoints', 'Scoring', and 'Quickstart' pages from docs.ainm.no into PROBLEM.md. Fill in ALL open questions: 6 terrain types, exact request/response format, auth method, coordinate system. No code until this is done.",
-      "status": "pending",
-      "files": ["PROBLEM.md"],
-      "why": "Building on wrong assumptions burns queries we can never get back. Know the format before writing a single line of client code.",
-      "deliverable": "PROBLEM.md fully filled in — zero open questions remaining"
+      "description": "Read all API docs — Simulation Mechanics, API Endpoints, Scoring, Quickstart. Fully documented in PROBLEM.md. All terrain types, scoring formula, endpoints, rate limits confirmed.",
+      "status": "complete",
+      "files": ["PROBLEM.md", "config.py"],
+      "key_discoveries": [
+        "8 internal terrain codes → 6 prediction classes (Ocean+Plains+Empty all → class 0)",
+        "Mountain and Ocean are STATIC — deterministic predictions possible from initial_states",
+        "Score formula: max(0, min(100, 100 × exp(-3 × weighted_kl))). Uniform ≈ 1-5/100",
+        "Static cells excluded from scoring weight — focus queries on dynamic zones",
+        "GET /budget endpoint — check remaining queries without tracking locally",
+        "GET /analysis post-round — gives ground truth H×W×6 tensor for learning",
+        "Rate limit: 5 req/sec on simulate"
+      ]
     },
     {
       "step_number": 3,
-      "description": "API Discovery script — scripts/api_discovery.py: authenticate with token, fire exactly ONE /simulate call with a minimal viewport, print the raw JSON response. Verify it matches the docs. Zero logic, just a probe.",
+      "description": "API client setup — src/api/client.py: typed Session wrapper with Bearer auth, methods for all endpoints (get_rounds, get_round_detail, get_budget, simulate, submit). src/api/models.py: dataclasses for all request/response types.",
       "status": "pending",
-      "files": ["scripts/api_discovery.py"],
-      "budget_impact": "Costs 1 query — confirm you have the token set before running",
-      "key_question": "Does the real response match the documented format?"
+      "files": ["src/api/client.py", "src/api/models.py"],
+      "note": "No raw requests calls anywhere else in codebase — all HTTP goes through client.py"
     },
     {
       "step_number": 4,
-      "description": "API Client — src/api/client.py + src/api/models.py: typed wrapper with methods simulate(seed, x, y, width, height) and submit(seed, tensor). Handles auth headers, HTTP errors. No raw requests calls anywhere else in the codebase.",
+      "description": "scripts/api_discovery.py — minimal probe script: authenticate, GET /rounds to find active round, GET /rounds/{id} to see initial_states structure, GET /budget to confirm remaining queries. Print all raw responses. Zero simulate calls — costs nothing.",
       "status": "pending",
-      "files": ["src/api/client.py", "src/api/models.py"]
+      "files": ["scripts/api_discovery.py"],
+      "budget_impact": "0 queries — no simulate calls, just reading free endpoints",
+      "verify": "Can see round_id, initial grid codes (10/11/0 for ocean/plains/empty, 5 for mountain), settlement list, queries_used"
     },
     {
       "step_number": 5,
-      "description": "Budget Manager — src/observation/budget_manager.py: persists query count to data/budget.json. HARD STOP at TOTAL_QUERIES=50 — raises BudgetExhaustedError before any API call is made. Every simulate() call MUST pass through this gate.",
+      "description": "Initial state analyzer — src/model/initial_analyzer.py: parse initial_states for all 5 seeds. Classify every cell as: STATIC_MOUNTAIN (code 5), STATIC_OCEAN (code 10), DYNAMIC_SETTLEMENT (code 1 or 2), DYNAMIC_LAND (code 0 or 11), STATIC_FOREST (code 4). Build per-seed 40×40 certainty map.",
       "status": "pending",
-      "files": ["src/observation/budget_manager.py"],
-      "critical": "This is the safety net — blowing the budget cannot be undone"
+      "files": ["src/model/initial_analyzer.py"],
+      "why": "Mountain and Ocean = near-certain predictions at zero query cost. Identify EXACTLY which cells need observation budget.",
+      "output": "Per-seed: list of static cells (high confidence), list of dynamic cells (need queries)"
     },
     {
       "step_number": 6,
-      "description": "Query Planner — src/observation/query_planner.py: generate list of (seed, x, y, w, h) for 9 non-overlapping tiles covering full 40x40 map per seed (45 queries), plus 5 spare queries held for re-querying uncertain areas after initial scan.",
+      "description": "Query Planner — src/observation/query_planner.py: given dynamic cell map, plan viewport queries. Strategy: 9 non-overlapping 15×15 tiles = full map scan (45 queries), 5 spare queries for re-querying highest-entropy dynamic zones. Assign queries across seeds evenly.",
       "status": "pending",
       "files": ["src/observation/query_planner.py"],
-      "math": "ceil(40/15)=3 → 3x3=9 tiles at x=[0,15,30], y=[0,15,30]; last column/row tiles are 10 cells wide"
+      "math": "ceil(40/15)=3 → tiles at x=[0,15,30], y=[0,15,30]; last tiles clamp to map edge. 9×5=45 + 5 spare = 50 exactly",
+      "future_optimization": "Entropy-guided query placement after initial scan (see features_backlog)"
     },
     {
       "step_number": 7,
-      "description": "Observation Runner — src/observation/runner.py: executes query plan, calls BudgetManager then APIClient per query, saves raw response JSON to data/observations/seed{seed}_x{x}_y{y}.json immediately after each call. Never batch — save after every single query.",
+      "description": "Observation Runner — src/observation/runner.py: calls GET /budget first, executes query plan one at a time, saves raw response to data/observations/seed{seed}_x{x}_y{y}_{timestamp}.json after each call. Respects 5 req/sec rate limit with sleep(0.2).",
       "status": "pending",
       "files": ["src/observation/runner.py"],
-      "important": "Save after EVERY query — if script crashes at query 43, we keep all 43"
+      "critical": "Save to disk IMMEDIATELY after each query. If crash at query 43, keep all 43. Sync with GET /budget before starting.",
+      "rate_limit": "sleep(0.2) between calls = max 5/sec"
     },
     {
       "step_number": 8,
-      "description": "Data Analysis — scripts/analyze_observations.py: load all saved observations, print terrain frequency per type, print ASCII coverage map (observed vs unobserved cells), count how many times each cell was seen across seeds.",
+      "description": "Data Analysis — scripts/analyze_observations.py: load all saved observations, print terrain frequency per class, print ASCII coverage map, show per-cell observation count, identify highest-variance cells (most uncertain = most important to score well on).",
       "status": "pending",
-      "files": ["scripts/analyze_observations.py"]
+      "files": ["scripts/analyze_observations.py"],
+      "output": "Print: coverage map, terrain distribution, top-10 most uncertain cells"
     },
     {
       "step_number": 9,
-      "description": "Terrain Estimator — src/model/terrain_estimator.py: per-cell probability distributions. Observed cells: use empirical frequency across sim seeds (stochastic samples). Unobserved cells: use global observed frequency as prior — NOT uniform, NOT zero.",
+      "description": "Terrain Estimator — src/model/terrain_estimator.py: build per-cell H×W×6 probability distributions. (A) Static cells: Mountain=[0,0,0,0,0,0.99+], Ocean=[0.99+,0,0,0,0,0]. (B) Observed cells: empirical frequency across queries. (C) Unobserved dynamic cells: global observed frequency as prior. Apply 0.01 floor + renormalize everywhere.",
       "status": "pending",
       "files": ["src/model/terrain_estimator.py"],
-      "scoring_note": "Confident wrong answer = worst penalty. Never output [1,0,0,0,0,0] unless cell was observed 100% same terrain across all queries."
+      "scoring_note": "Even for Mountain, apply 0.01 floor: [0.0005, 0.0005, 0.0005, 0.0005, 0.0005, 0.9975] → renormalize"
     },
     {
       "step_number": 10,
-      "description": "Tensor Builder — src/prediction/tensor_builder.py: assembles W×H×6 numpy array from terrain estimator output. Hard assertion: each row sums to 1.0 ± epsilon. Saves to data/predictions/seed{seed}_tensor.npy and .json.",
+      "description": "Tensor Builder — src/prediction/tensor_builder.py: assemble H×W×6 numpy array from estimator. Hard assertion: every row sums to 1.0 ± 1e-6 AFTER floor application. Save to data/predictions/seed{seed}_tensor.npy and .json.",
       "status": "pending",
       "files": ["src/prediction/tensor_builder.py"]
     },
     {
       "step_number": 11,
-      "description": "main.py — full pipeline orchestration: load config → plan queries → run observations → estimate terrain → build tensors → submit all 5 seeds. Each stage is a clearly named function. Prints budget remaining after each query.",
+      "description": "main.py — full pipeline orchestration: load config → auth → get round → analyze initial states → plan queries → run observations → estimate terrain → build tensors → submit all 5 seeds. Clear function per stage. Prints budget remaining after every query.",
       "status": "pending",
       "files": ["main.py"]
     },
     {
       "step_number": 12,
-      "description": "Submit & Score — post all 5 seed predictions, record score + timestamp in data/scores.json. Compare to previous best. If better: create PR victor → main and ask user to confirm merge. If not better: go back to step 9 and improve model.",
+      "description": "Submit & Score — post all 5 seeds, record score + timestamp in data/scores.json. Compare to previous best. If better: create PR victor → main and ask user to confirm merge. If not: go back to step 9 and improve model. Use GET /analysis post-round to understand where we lost points.",
       "status": "pending",
       "files": ["data/scores.json"],
-      "branch_rule": "No push to remote. No merge to main. Only create a PR when score is verified better."
+      "branch_rule": "No push to remote. No merge to main. Create PR only when score is verified better than previous best."
     }
   ]
 }
