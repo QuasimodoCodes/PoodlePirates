@@ -98,7 +98,15 @@ def _execute_tool(name: str, args: dict, client: TripletexClient) -> dict:
         else:
             return {"error": f"Unknown tool: {name}"}
     except Exception as exc:
-        return {"error": str(exc)}
+        # Extract the actual HTTP response body if available so Gemini can self-correct
+        detail = str(exc)
+        cause = getattr(exc, "__cause__", None) or getattr(exc, "__context__", None)
+        if cause and hasattr(cause, "response"):
+            try:
+                detail = cause.response.json()
+            except Exception:
+                detail = cause.response.text
+        return {"error": detail}
 
 
 # ── Main agent loop ────────────────────────────────────────────────────────────

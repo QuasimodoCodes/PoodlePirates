@@ -10,7 +10,7 @@ class Settings(BaseSettings):
 
     # Google Gemini — free tier: https://aistudio.google.com/app/apikey
     gemini_api_key: str
-    gemini_model: str = "gemini-1.5-flash"
+    gemini_model: str = "gemini-2.5-flash"
 
     # Agent behaviour
     log_folder: str = "./logs"
