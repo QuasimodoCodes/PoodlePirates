@@ -76,6 +76,15 @@ POST /project
 Required: name, startDate
 Optional: customer:{id}, number, projectManager:{id}, description
 
+Steps for a project task:
+1. If customer mentioned: POST /customer {name, organizationNumber} → get customer id
+2. If project manager mentioned by name/email:
+   - GET /employee?firstName=X to search
+   - If not found: POST /employee {firstName, lastName, email} → get employee id
+3. POST /project {name, startDate, customer:{id}, projectManager:{id}}
+   - If no date given in prompt, use today's date as startDate (format: YYYY-MM-DD)
+   - Use today: import not needed, just use current year 2026-03-19 as reference
+
 ## TRAVEL EXPENSE
 POST /travelExpense
 Required: employee:{id}, startDate, endDate, name/description

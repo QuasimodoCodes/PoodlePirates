@@ -119,6 +119,7 @@ async def run_agent(
 ) -> None:
     ai = genai.Client(api_key=settings.gemini_api_key)
     start = time.time()
+    today = time.strftime("%Y-%m-%d")
 
     # Build initial contents
     contents: list[types.Content] = []
@@ -137,7 +138,9 @@ async def run_agent(
         elif text:
             file_parts.append(types.Part.from_text(text=f"File '{name}':\n{text}"))
 
-    user_parts = file_parts + [types.Part.from_text(text=prompt)]
+    # Prepend today's date so agent never has to guess
+    date_hint = types.Part.from_text(text=f"[Today's date: {today}]\n\n")
+    user_parts = [date_hint] + file_parts + [types.Part.from_text(text=prompt)]
     contents.append(types.Content(role="user", parts=user_parts))
 
     for iteration in range(MAX_ITERATIONS):
