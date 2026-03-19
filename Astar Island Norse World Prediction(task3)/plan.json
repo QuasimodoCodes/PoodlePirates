@@ -79,7 +79,8 @@
       "description": "Query Planner — src/observation/query_planner.py: given dynamic cell map, plan viewport queries. Strategy: 9 non-overlapping 15×15 tiles = full map scan (45 queries), 5 spare queries for re-querying highest-entropy dynamic zones. Assign queries across seeds evenly.",
       "status": "pending",
       "files": ["src/observation/query_planner.py"],
-      "math": "ceil(40/15)=3 → tiles at x=[0,15,30], y=[0,15,30]; last tiles clamp to map edge. 9×5=45 + 5 spare = 50 exactly",
+      "math": "Anchors at [0,15,25] for both x and y — NOT [0,15,30]. Each tile is a full 15×15. Tiles at 25 overlap [25-29] with previous tile but guarantee full map coverage. 9×5=45 + 5 spare = 50 exactly.",
+      "why_not_30": "x=30 + w=15 = x=45, out of bounds on a 40-wide map. x=25 + w=15 = x=40, exactly fits.",
       "future_optimization": "Entropy-guided query placement after initial scan (see features_backlog)"
     },
     {
@@ -102,7 +103,8 @@
       "description": "Terrain Estimator — src/model/terrain_estimator.py: build per-cell H×W×6 probability distributions. (A) Static cells: Mountain=[0,0,0,0,0,0.99+], Ocean=[0.99+,0,0,0,0,0]. (B) Observed cells: empirical frequency across queries. (C) Unobserved dynamic cells: global observed frequency as prior. Apply 0.01 floor + renormalize everywhere.",
       "status": "pending",
       "files": ["src/model/terrain_estimator.py"],
-      "scoring_note": "Even for Mountain, apply 0.01 floor: [0.0005, 0.0005, 0.0005, 0.0005, 0.0005, 0.9975] → renormalize"
+      "scoring_note": "Dynamic cells: 0.01 floor (safety net). Static cells (Mountain/Ocean): 1e-5 floor (near-certain, excluded from scoring weight anyway). Always renormalize after floor.",
+      "simulate_returns_year_50": "Each simulate call runs the FULL 50-year sim — we observe year-50 state, NOT year-0. Empirical frequency across queries IS our Monte Carlo estimate. This is correct."
     },
     {
       "step_number": 10,

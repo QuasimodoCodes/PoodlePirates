@@ -49,8 +49,12 @@ TERRAIN_INDICES = {v: k for k, v in TERRAIN_CLASSES.items()}  # name → index
 # ─────────────────────────────────────────────
 # DERIVED / COVERAGE MATH
 # ─────────────────────────────────────────────
-TILES_PER_ROW        = math.ceil(MAP_WIDTH  / VIEWPORT_MAX_WIDTH)   # = 3
-TILES_PER_COL        = math.ceil(MAP_HEIGHT / VIEWPORT_MAX_HEIGHT)  # = 3
+# Tile anchors: [0, 15, 25] NOT [0, 15, 30]
+# x=30 + w=15 = 45 → out of bounds on 40-wide map
+# x=25 + w=15 = 40 → exactly fits, slight overlap at [25-29] is fine
+TILE_ANCHORS         = [0, 15, 25]                                   # x and y origins for each tile
+TILES_PER_ROW        = len(TILE_ANCHORS)                             # = 3
+TILES_PER_COL        = len(TILE_ANCHORS)                             # = 3
 TILES_TO_COVER_MAP   = TILES_PER_ROW * TILES_PER_COL                # = 9  (full map scan)
 SPARE_QUERIES        = TOTAL_QUERIES - (NUM_SEEDS * TILES_TO_COVER_MAP)  # = 5
 
@@ -72,6 +76,11 @@ SCORES_FILE          = f"{DATA_DIR}/scores.json"
 #     If ground truth is non-zero where you put 0.0 → KL divergence = infinity.
 #     Always apply PROB_FLOOR, then renormalize.
 #
-PROB_FLOOR           = 0.01                                          # minimum per class
-UNIFORM_PRIOR        = [1.0 / NUM_TERRAIN_CLASSES] * NUM_TERRAIN_CLASSES  # baseline ~1-5 score
+PROB_FLOOR_DYNAMIC   = 0.01   # floor for dynamic cells (Settlement, Ruin, etc.)
+PROB_FLOOR_STATIC    = 1e-5  # floor for static cells (Mountain, Ocean) — excluded from scoring weight anyway
+UNIFORM_PRIOR        = [1.0 / NUM_TERRAIN_CLASSES] * NUM_TERRAIN_CLASSES  # baseline ~1-5/100 score
 SMOOTHING_EPSILON    = 1e-9  # secondary guard against log(0)
+
+# Internal terrain codes that map to static prediction classes
+STATIC_TERRAIN_CODES = {10, 5}   # Ocean (→ class 0), Mountain (→ class 5) — never change
+DYNAMIC_TERRAIN_CODES = {0, 1, 2, 3, 4, 11}  # can change after 50 years of simulation
