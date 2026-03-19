@@ -74,6 +74,11 @@ async def _handle_solve(req: SolveRequest):
     return SolveResponse(status="completed")
 
 
+@app.post("/", response_model=SolveResponse)
+async def root_solve(req: SolveRequest):
+    return await _handle_solve(req)
+
+
 @app.post("/solve", response_model=SolveResponse)
 async def solve(req: SolveRequest):
     return await _handle_solve(req)
