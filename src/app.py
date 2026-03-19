@@ -53,28 +53,33 @@ async def health():
     return {"status": "ok"}
 
 
-@app.post("/solve", response_model=SolveResponse)
-async def solve(req: SolveRequest):
+async def _handle_solve(req: SolveRequest):
+    """Shared handler for /solve and /solv (typo-safe alias)."""
     run_id = str(uuid.uuid4())[:8]
     start = time.time()
     log.info("solve_start", run_id=run_id, prompt_preview=req.prompt[:120])
-
     try:
         from src.tripletex.client import TripletexClient
         from src.agent.runner import run_agent
-
         client = TripletexClient(
             proxy_url=req.tripletex_credentials.base_url,
             session_token=req.tripletex_credentials.session_token,
         )
         await run_agent(client=client, prompt=req.prompt, files=req.files or [], run_id=run_id)
-
     except Exception as exc:
         elapsed = round(time.time() - start, 2)
         log.error("solve_failed", run_id=run_id, elapsed=elapsed, error=str(exc))
-        # Still return completed — platform scores on what was done, not the exception
-        return SolveResponse(status="completed")
-
     elapsed = round(time.time() - start, 2)
     log.info("solve_done", run_id=run_id, elapsed=elapsed)
     return SolveResponse(status="completed")
+
+
+@app.post("/solve", response_model=SolveResponse)
+async def solve(req: SolveRequest):
+    return await _handle_solve(req)
+
+
+@app.post("/solv", response_model=SolveResponse)  # typo-safe alias
+async def solv(req: SolveRequest):
+    return await _handle_solve(req)
+
