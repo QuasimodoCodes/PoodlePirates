@@ -159,6 +159,12 @@ async def run_agent(
             ),
         )
 
+        # Guard against empty/blocked responses
+        if not response.candidates or response.candidates[0].content is None:
+            log.warning("gemini_empty_response", run_id=run_id, iteration=iteration,
+                        finish_reason=response.candidates[0].finish_reason if response.candidates else "no_candidates")
+            break
+
         # Add model response to history
         contents.append(response.candidates[0].content)
 

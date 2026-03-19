@@ -28,13 +28,17 @@ Paths are relative: "/customer", "/employee", "/invoice" etc.
 POST /customer
 Required: name
 Optional: organizationNumber, email, phoneNumber, phoneNumberMobile,
-          address: {addressLine1, postalCode, city, country: {id}}
+          postalAddress: {addressLine1, postalCode, city, country: {id}}
           isSupplier, isCustomer, currency: {id}
 
 Search: GET /customer?name=Bergvik&count=5
 
-Norway country id: use GET /country?name=Norge to find it (usually id=161 or similar).
-For Norwegian customers, address country is Norway.
+Country lookup: GET /country?name=Norge&count=10 → use the id of "Norge" for Norwegian addresses.
+For non-Norwegian companies, GET /country?name=<country>&count=5.
+
+IMPORTANT: Use "postalAddress" (not "address") for the customer's address.
+If POST /customer with full details gives 422, try creating with just {name} first,
+then PUT /customer/{id} with the remaining fields (but include version from the GET response).
 
 ## EMPLOYEE
 POST /employee
