@@ -6,47 +6,43 @@
   },
   {
     "step_number": 2,
-    "description": "Tripletex API client: implement authentication (session token via consumer/employee token) and a base HTTP client with retry logic. Verify we can fetch company info from /company.",
-    "status": "pending"
+    "description": "REVISED - FastAPI server skeleton + dynamic Tripletex client: build POST /solve endpoint that accepts {prompt, proxy_url, session_token, files}. Rewrite TripletexClient to accept per-request credentials (proxy_url + session_token) instead of env vars. Add FastAPI + uvicorn to requirements. Verify server starts and /health returns 200.",
+    "status": "complete"
   },
   {
     "step_number": 3,
-    "description": "Document ingestion - PDF and image support: implement a document loader that reads PDFs (pdfplumber) and images (Pillow), converts pages to base64 for Claude vision.",
+    "description": "Claude tool-calling agent: implement an agentic loop where Claude receives the task prompt and a registry of Tripletex API tools. Claude calls tools in sequence until the task is complete. Tools wrap the dynamic TripletexClient. Support all 7 input languages via Claude's multilingual understanding.",
     "status": "pending"
   },
   {
     "step_number": 4,
-    "description": "AI extraction layer: use Claude claude-3-5-sonnet with vision to extract structured accounting fields (vendor, date, amount, VAT, line items, currency) from ingested documents. Return typed Pydantic models.",
+    "description": "Tripletex tools registry: implement tool definitions for the most common task categories: employees, customers, products, invoices, payments, credit notes, travel expenses, projects, departments, vouchers/ledger. Each tool wraps one or more Tripletex API calls.",
     "status": "pending"
   },
   {
     "step_number": 5,
-    "description": "Email ingestion: implement IMAP client to connect to a mailbox, fetch unread emails, extract PDF/image attachments, and pass them to the document loader.",
+    "description": "File handling: if the /solve request includes PDF or image attachments (base64 or multipart), extract text/images and include them in Claude's context so it can read invoice data from documents.",
     "status": "pending"
   },
   {
     "step_number": 6,
-    "description": "Data validation and transformation: validate extracted data against Tripletex schema requirements (account codes, VAT types, currency codes). Map extracted fields to Tripletex API payload format.",
+    "description": "Error handling and agent guardrails: handle Tripletex API errors (4xx/5xx), rate limits (429), Claude tool errors. Add a hard timeout guard (4.5 min) so we always return before the platform's 5-min cutoff. Log each run to logs/ as JSON.",
     "status": "pending"
   },
   {
     "step_number": 7,
-    "description": "Tripletex posting: implement posting of supplier invoices (vouchers) to Tripletex via POST /ledger/voucher. Handle duplicate detection and error responses.",
+    "description": "Efficiency optimization: minimize API round-trips by fetching lookups (VAT types, account codes, currencies) once and caching within a request. Use Claude to batch operations where possible.",
     "status": "pending"
   },
   {
     "step_number": 8,
-    "description": "Orchestration - main agent loop: tie all modules together. Watch an inbox folder and/or poll email, process each document end-to-end, log results, mark emails as read.",
+    "description": "Deployment: expose the FastAPI server publicly over HTTPS. Options: Railway, Render, or ngrok for local testing. Document deployment steps in README. Verify the platform can reach /solve.",
     "status": "pending"
   },
   {
     "step_number": 9,
-    "description": "Structured logging and error handling: implement per-run JSON log entries recording document source, extracted fields, Tripletex response, and any errors. Add retry and dead-letter queue for failed postings.",
-    "status": "pending"
-  },
-  {
-    "step_number": 10,
-    "description": "End-to-end test with a real sample invoice: run the full pipeline on a test PDF invoice, verify Tripletex receives the correct voucher, write a summary in problems_log.md.",
+    "description": "End-to-end test: simulate a /solve request locally with a known task prompt (e.g. 'Create an employee named X'), verify the correct Tripletex API call is made and returns 200. Cover at least 3 task categories.",
     "status": "pending"
   }
 ]
+
