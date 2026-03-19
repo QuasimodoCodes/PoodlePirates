@@ -60,7 +60,11 @@ Norwegian VAT: 25% standard, 15% food, 12% transport/hotel, 0% exempt.
 Two-step: order then invoice
 1. POST /order {customer:{id}, orderDate:"YYYY-MM-DD", deliveryDate:"YYYY-MM-DD",
                orderLines:[{description:"...", count:1, unitPriceExcludingVatCurrency:X, vatType:{id}}]}
-2. POST /invoice {orders:[{id:<order_id>}], invoiceDate:"YYYY-MM-DD", sendToCustomer:false}
+2. POST /invoice body: {orders:[{id:<order_id>}], invoiceDate:"YYYY-MM-DD", invoiceDueDate:"YYYY-MM-DD"}
+   - invoiceDueDate is REQUIRED. Default: invoiceDate + 14 days.
+   - Do NOT include sendToCustomer in the body (causes 422).
+   - If task says "send to customer": add query param sendToCustomer=true in params.
+   - If task says "do NOT send": omit sendToCustomer param entirely.
 
 ## SUPPLIER INVOICE
 POST /supplierInvoice
