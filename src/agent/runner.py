@@ -1,75 +1,107 @@
 """
-Agent runner — Claude tool-calling loop.
+Agent runner — Gemini tool-calling loop (google-genai SDK).
 
 Flow:
-  1. Build messages with the task prompt (+ any file content).
-  2. Send to Claude with Tripletex tools.
-  3. Claude returns tool_use blocks → execute each against TripletexClient.
-  4. Feed tool results back to Claude.
-  5. Repeat until Claude returns stop_reason == "end_turn" (task done).
+  1. Build the initial message with the task prompt (+ any file content).
+  2. Send to Gemini with Tripletex tools defined as function declarations.
+  3. Gemini returns function_call parts → execute each against TripletexClient.
+  4. Feed tool results back to Gemini.
+  5. Repeat until Gemini returns a plain text response (task done).
 """
 import json
 import time
 
-import anthropic
 import structlog
+from google import genai
+from google.genai import types
 
 from src.agent.prompt import SYSTEM_PROMPT
-from src.agent.tools import TOOLS
 from src.config import settings
 from src.tripletex.client import TripletexClient
 
 log = structlog.get_logger()
 
-MAX_ITERATIONS = 20        # hard cap on tool-call rounds
-TIMEOUT_SECONDS = 260      # stop looping after ~4.3 min (platform allows 5 min)
+MAX_ITERATIONS = 20
+TIMEOUT_SECONDS = 260
+
+# ── Gemini tool declarations ───────────────────────────────────────────────────
+
+TOOLS = [
+    types.Tool(
+        function_declarations=[
+            types.FunctionDeclaration(
+                name="tripletex_get",
+                description="Call a Tripletex API GET endpoint to read or search for data. Use to look up IDs before creating resources.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "path": types.Schema(type=types.Type.STRING, description="API path e.g. '/employee'. Do NOT include the base URL."),
+                        "params": types.Schema(type=types.Type.OBJECT, description="Optional query parameters e.g. {\"name\": \"Acme\", \"count\": 5}."),
+                    },
+                    required=["path"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="tripletex_post",
+                description="Call a Tripletex API POST endpoint to create a new resource. Returns the created object with its new id.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "path": types.Schema(type=types.Type.STRING, description="API path e.g. '/employee'."),
+                        "body": types.Schema(type=types.Type.OBJECT, description="JSON body of the resource to create."),
+                    },
+                    required=["path", "body"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="tripletex_put",
+                description="Call a Tripletex API PUT endpoint to update an existing resource. Include the id in the path.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "path": types.Schema(type=types.Type.STRING, description="API path with id e.g. '/employee/42'."),
+                        "body": types.Schema(type=types.Type.OBJECT, description="Full updated resource body."),
+                        "params": types.Schema(type=types.Type.OBJECT, description="Optional query parameters."),
+                    },
+                    required=["path", "body"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="tripletex_delete",
+                description="Call a Tripletex API DELETE endpoint to remove a resource.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "path": types.Schema(type=types.Type.STRING, description="API path with id e.g. '/travelExpense/99'."),
+                    },
+                    required=["path"],
+                ),
+            ),
+        ]
+    )
+]
 
 
-def _execute_tool(name: str, inputs: dict, client: TripletexClient) -> str:
-    """Execute a single tool call and return the result as a JSON string."""
+# ── Tool execution ─────────────────────────────────────────────────────────────
+
+def _execute_tool(name: str, args: dict, client: TripletexClient) -> dict:
     try:
         if name == "tripletex_get":
-            result = client.get(inputs["path"], params=inputs.get("params"))
+            return client.get(args["path"], params=args.get("params"))
         elif name == "tripletex_post":
-            result = client.post(inputs["path"], body=inputs["body"])
+            return client.post(args["path"], body=args["body"])
         elif name == "tripletex_put":
-            result = client.put(inputs["path"], body=inputs["body"], params=inputs.get("params"))
+            return client.put(args["path"], body=args["body"], params=args.get("params"))
         elif name == "tripletex_delete":
-            client.delete(inputs["path"])
-            result = {"status": "deleted"}
+            client.delete(args["path"])
+            return {"status": "deleted"}
         else:
-            result = {"error": f"Unknown tool: {name}"}
+            return {"error": f"Unknown tool: {name}"}
     except Exception as exc:
-        result = {"error": str(exc)}
-
-    return json.dumps(result, ensure_ascii=False, default=str)
+        return {"error": str(exc)}
 
 
-def _build_initial_messages(prompt: str, files: list[dict]) -> list[dict]:
-    """Build the initial user message, optionally including file content."""
-    content: list = []
-
-    # Attach any files as base64 images or extracted text
-    for f in files:
-        mime = f.get("mime_type", "")
-        b64 = f.get("content_base64", "")
-        name = f.get("name", "file")
-
-        if mime.startswith("image/") and b64:
-            content.append({
-                "type": "image",
-                "source": {"type": "base64", "media_type": mime, "data": b64},
-            })
-            content.append({"type": "text", "text": f"(File: {name})"})
-        elif b64:
-            # Non-image: treat as text context if we have extracted text
-            text = f.get("text", "")
-            if text:
-                content.append({"type": "text", "text": f"File '{name}':\n{text}"})
-
-    content.append({"type": "text", "text": prompt})
-    return [{"role": "user", "content": content}]
-
+# ── Main agent loop ────────────────────────────────────────────────────────────
 
 async def run_agent(
     client: TripletexClient,
@@ -77,62 +109,76 @@ async def run_agent(
     files: list[dict],
     run_id: str,
 ) -> None:
-    """
-    Run the Claude tool-calling loop until the task is complete.
-    """
-    ai = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-    messages = _build_initial_messages(prompt, files)
+    ai = genai.Client(api_key=settings.gemini_api_key)
     start = time.time()
+
+    # Build initial contents
+    contents: list[types.Content] = []
+
+    # Attach files if present
+    file_parts = []
+    for f in files:
+        mime = f.get("mime_type", "")
+        b64 = f.get("content_base64", "")
+        text = f.get("text", "")
+        name = f.get("name", "file")
+        if mime.startswith("image/") and b64:
+            import base64
+            file_parts.append(types.Part.from_bytes(data=base64.b64decode(b64), mime_type=mime))
+            file_parts.append(types.Part.from_text(text=f"(File: {name})"))
+        elif text:
+            file_parts.append(types.Part.from_text(text=f"File '{name}':\n{text}"))
+
+    user_parts = file_parts + [types.Part.from_text(text=prompt)]
+    contents.append(types.Content(role="user", parts=user_parts))
 
     for iteration in range(MAX_ITERATIONS):
         if time.time() - start > TIMEOUT_SECONDS:
             log.warning("agent_timeout", run_id=run_id, iteration=iteration)
             break
 
-        log.info("agent_iteration", run_id=run_id, iteration=iteration, messages=len(messages))
+        log.info("agent_iteration", run_id=run_id, iteration=iteration)
 
-        response = ai.messages.create(
-            model=settings.anthropic_model,
-            max_tokens=4096,
-            system=SYSTEM_PROMPT,
-            tools=TOOLS,
-            messages=messages,
+        response = ai.models.generate_content(
+            model=settings.gemini_model,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+                tools=TOOLS,
+            ),
         )
 
-        log.info(
-            "claude_response",
-            run_id=run_id,
-            stop_reason=response.stop_reason,
-            tool_calls=[b.name for b in response.content if b.type == "tool_use"],
-        )
+        # Add model response to history
+        contents.append(response.candidates[0].content)
 
-        # Add Claude's response to the conversation
-        messages.append({"role": "assistant", "content": response.content})
+        # Collect function calls
+        function_calls = [
+            part.function_call
+            for part in response.candidates[0].content.parts
+            if part.function_call is not None
+        ]
 
-        # Task complete — no more tool calls
-        if response.stop_reason == "end_turn":
+        log.info("gemini_response", run_id=run_id, function_calls=[fc.name for fc in function_calls])
+
+        # No function calls → done
+        if not function_calls:
             log.info("agent_complete", run_id=run_id, iterations=iteration + 1)
             break
 
-        # Execute all tool calls Claude requested
-        if response.stop_reason == "tool_use":
-            tool_results = []
-            for block in response.content:
-                if block.type != "tool_use":
-                    continue
+        # Execute tools and collect responses
+        tool_response_parts = []
+        for fc in function_calls:
+            args = dict(fc.args)
+            log.info("tool_call", run_id=run_id, tool=fc.name, inputs=args)
+            result = _execute_tool(fc.name, args, client)
+            log.info("tool_result", run_id=run_id, tool=fc.name,
+                     result_preview=json.dumps(result, default=str)[:200])
 
-                log.info("tool_call", run_id=run_id, tool=block.name, inputs=block.input)
-                result_str = _execute_tool(block.name, block.input, client)
-                log.info("tool_result", run_id=run_id, tool=block.name, result_preview=result_str[:200])
+            tool_response_parts.append(
+                types.Part.from_function_response(
+                    name=fc.name,
+                    response={"result": json.dumps(result, default=str)},
+                )
+            )
 
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": result_str,
-                })
-
-            messages.append({"role": "user", "content": tool_results})
-        else:
-            # Unexpected stop reason
-            log.warning("unexpected_stop_reason", run_id=run_id, reason=response.stop_reason)
-            break
+        contents.append(types.Content(role="user", parts=tool_response_parts))
