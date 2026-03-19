@@ -150,14 +150,31 @@ async def run_agent(
 
         log.info("agent_iteration", run_id=run_id, iteration=iteration)
 
-        response = ai.models.generate_content(
-            model=settings.gemini_model,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                tools=TOOLS,
-            ),
-        )
+        # Call Gemini with retry on rate limit (429)
+        response = None
+        for attempt in range(5):
+            try:
+                response = ai.models.generate_content(
+                    model=settings.gemini_model,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_PROMPT,
+                        tools=TOOLS,
+                    ),
+                )
+                break
+            except Exception as e:
+                err = str(e)
+                if "429" in err or "quota" in err.lower() or "rate" in err.lower():
+                    wait = 10 * (attempt + 1)
+                    log.warning("gemini_rate_limit", run_id=run_id, attempt=attempt, wait=wait)
+                    time.sleep(wait)
+                else:
+                    raise
+
+        if response is None:
+            log.error("gemini_failed_all_retries", run_id=run_id)
+            break
 
         # Guard against empty/blocked responses
         if not response.candidates or response.candidates[0].content is None:
