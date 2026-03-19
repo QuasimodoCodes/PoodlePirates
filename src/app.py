@@ -20,12 +20,16 @@ log = structlog.get_logger()
 
 # ── Request / Response models ─────────────────────────────────────────────────
 
+class TripletexCredentials(BaseModel):
+    base_url: str
+    session_token: str
+
+
 class SolveRequest(BaseModel):
     """Payload sent by the competition platform to /solve."""
-    prompt: str                          # Task description (any of 7 languages)
-    proxy_url: str                       # Base URL for Tripletex API calls
-    session_token: str                   # Pre-authenticated session token
-    files: list[dict] | None = None      # Optional attachments [{name, content_base64, mime_type}]
+    prompt: str
+    files: list[dict] | None = None
+    tripletex_credentials: TripletexCredentials
 
 
 class SolveResponse(BaseModel):
@@ -59,7 +63,10 @@ async def solve(req: SolveRequest):
         from src.tripletex.client import TripletexClient
         from src.agent.runner import run_agent
 
-        client = TripletexClient(proxy_url=req.proxy_url, session_token=req.session_token)
+        client = TripletexClient(
+            proxy_url=req.tripletex_credentials.base_url,
+            session_token=req.tripletex_credentials.session_token,
+        )
         await run_agent(client=client, prompt=req.prompt, files=req.files or [], run_id=run_id)
 
     except Exception as exc:

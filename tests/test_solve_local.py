@@ -28,8 +28,11 @@ TASK_PROMPT = (
 def main():
     payload = {
         "prompt": TASK_PROMPT,
-        "proxy_url": PROXY_URL,
-        "session_token": SESSION_TOKEN,
+        "files": [],
+        "tripletex_credentials": {
+            "base_url": PROXY_URL,
+            "session_token": SESSION_TOKEN,
+        }
     }
 
     print(f"Sending task to /solve:\n  {TASK_PROMPT}\n")
