@@ -12,7 +12,7 @@
   {
     "step_number": 3,
     "description": "Claude tool-calling agent: implement an agentic loop where Claude receives the task prompt and a registry of Tripletex API tools. Claude calls tools in sequence until the task is complete. Tools wrap the dynamic TripletexClient. Support all 7 input languages via Claude's multilingual understanding.",
-    "status": "pending"
+    "status": "complete"
   },
   {
     "step_number": 4,
