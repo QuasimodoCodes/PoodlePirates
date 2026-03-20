@@ -196,9 +196,11 @@ async def run_agent(
         log.info("agent_iteration", run_id=run_id, iteration=iteration)
 
         # Call Gemini with model fallback on rate limit (429)
-        # gemini-3-flash-preview has better instruction following than flash-lite
-        MODELS = [settings.gemini_model, "gemini-3-flash-preview", "gemini-2.5-flash-lite"]
+        # Each model has independent quota — more models = more resilience
+        MODELS = [settings.gemini_model, "gemini-3-flash-preview", "gemini-2.5-flash-lite", "gemini-3.1-flash-lite-preview"]
         response = None
+        retry_after_secs = 30  # default backoff
+
         for model in MODELS:
             try:
                 response = ai.models.generate_content(
@@ -216,14 +218,20 @@ async def run_agent(
                 err = str(e)
                 if "429" in err or "quota" in err.lower() or "rate" in err.lower():
                     log.warning("gemini_rate_limit", run_id=run_id, model=model)
+                    # Parse retry-after hint from error
+                    import re
+                    match = re.search(r'retry in (\d+(?:\.\d+)?)s', err)
+                    if match:
+                        retry_after_secs = max(retry_after_secs, int(float(match.group(1))) + 5)
                     continue  # try next model
                 else:
                     raise
 
         if response is None:
-            # All models rate limited — wait and retry with each model again
-            log.warning("all_models_rate_limited", run_id=run_id, wait=15)
-            await asyncio.sleep(15)
+            # All models rate limited — wait using the parsed retry-after, then try once more
+            wait_time = min(retry_after_secs, 90)  # cap at 90s to stay within 5-min timeout
+            log.warning("all_models_rate_limited", run_id=run_id, wait=wait_time)
+            await asyncio.sleep(wait_time)
             for model in MODELS:
                 try:
                     response = ai.models.generate_content(
@@ -234,6 +242,7 @@ async def run_agent(
                             tools=TOOLS,
                         ),
                     )
+                    log.info("using_model_after_wait", run_id=run_id, model=model)
                     break
                 except Exception:
                     continue

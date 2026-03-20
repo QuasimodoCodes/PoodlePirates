@@ -48,20 +48,22 @@ No VAT: id=0
 
 ## 1. EMPLOYEE
 POST /employee
-Required: firstName, lastName
-Optional: email, phoneNumberMobile, dateOfBirth (YYYY-MM-DD), address:{addressLine1, postalCode, city, country:{id}}
+Required: firstName, lastName, email (MUST be provided — validation requires it)
+Optional: phoneNumberMobile, dateOfBirth (YYYY-MM-DD), address:{addressLine1, postalCode, city, country:{id}}
 
-If the task says the employee should be an "administrator" or "kontoadministrator":
-  Include in POST body: "userType": "ADMINISTRATOR"
-Otherwise omit userType (defaults to STANDARD).
+ALWAYS include these fields:
+- "userType": "STANDARD" (REQUIRED — omitting it causes validation error)
+  If the task says "administrator" or "kontoadministrator", use "ADMINISTRATOR" instead.
+- "dateOfBirth": "1990-01-15" (use task value if given, else use this default — required for employment)
+- If POST fails with "department.id" validation error, GET /department?count=1&fields=id to find a department,
+  then retry with "department": {"id": <dept_id>} added.
 
 ALWAYS create employment AFTER creating employee:
 POST /employee/employment
 Body: {"employee": {"id": <emp_id>}, "startDate": "YYYY-MM-DD", "isMainEmployer": true}
 Use startDate from task. If missing, use today's date.
-NOTE: If employment creation fails with "dateOfBirth required", the employee must have dateOfBirth set.
 
-Search: GET /employee?email=X&count=5  OR  GET /employee?firstName=X&lastName=Y&count=5
+Search: GET /employee?count=100&fields=id,firstName,lastName,email
 
 ---
 
@@ -74,6 +76,8 @@ Optional: organizationNumber, email, phoneNumber, phoneNumberMobile, invoiceEmai
   isCustomer (bool), isSupplier (bool), isPrivateIndividual (bool),
   language, currency:{id}
 
+IMPORTANT: Use "email" for the customer's email address. "invoiceEmail" is ONLY for a separate invoice email.
+When the task says "e-post", "epost", "email", "correo", "E-Mail" → always use the "email" field.
 Address field name is "postalAddress" NOT "address".
 If POST fails with 422: read validationMessages, fix the field, retry ONCE.
 
@@ -88,7 +92,8 @@ Optional: number, priceExcludingVatCurrency (float), priceIncludingVatCurrency (
   costExcludingVatCurrency (float), vatType:{id}, productUnit:{id},
   account:{id}, department:{id}, supplier:{id}, description
 
-For VAT on products for sale, use OUTPUT VAT type (id=3 for 25%).
+For VAT on products: OMIT vatType unless the task specifically requires it.
+If you must set VAT, try id=3 first. If 422 "Ugyldig mva-kode", retry with vatType omitted.
 
 ---
 
@@ -164,13 +169,17 @@ Optional: departmentNumber, departmentManager:{id}
 
 ## 11. PROJECT
 POST /project
-Required: name, startDate (YYYY-MM-DD)
-Optional: customer:{id}, projectManager:{id}, endDate, description, department:{id}
+Required: name, startDate (YYYY-MM-DD), projectManager:{id}
+Optional: customer:{id}, endDate, description, department:{id}
 
 Steps:
 1. If customer mentioned → POST /customer first
-2. If project manager mentioned → POST /employee first (+ employment)
-3. POST /project {name, startDate, customer:{id}, projectManager:{id}}
+2. For project manager:
+   a. If task mentions a specific person → create that employee (with full fields: email, userType, dateOfBirth)
+   b. Then POST /project with projectManager:{id: <new_emp_id>}
+   c. If POST fails with "not given access as project manager" error → GET /employee?count=1&fields=id to find
+      the first (admin) employee and retry with their ID as projectManager
+3. POST /project {name, startDate, projectManager:{id}, customer:{id}}
    If no startDate given, use TODAY.
 
 To add an activity to a project:
@@ -231,11 +240,16 @@ Body: {
   "date": "YYYY-MM-DD",
   "description": "...",
   "postings": [
-    {"date": "YYYY-MM-DD", "account": {"id": <acct_id>}, "amount": -5000.0, "amountGross": -5000.0, "currency": {"id": 1}},
-    {"date": "YYYY-MM-DD", "account": {"id": <acct_id>}, "amount": 5000.0, "amountGross": 5000.0, "currency": {"id": 1}}
+    {"row": 1, "date": "YYYY-MM-DD", "account": {"id": <acct_id>}, "amount": -5000.0, "amountGross": -5000.0, "amountGrossCurrency": -5000.0, "currency": {"id": 1}},
+    {"row": 2, "date": "YYYY-MM-DD", "account": {"id": <acct_id>}, "amount": 5000.0, "amountGross": 5000.0, "amountGrossCurrency": 5000.0, "currency": {"id": 1}}
   ]
 }
-The field is "postings" NOT "vouchers".
+CRITICAL posting rules:
+- Field is "postings" NOT "vouchers"
+- "row" MUST be >= 1 (row 0 is system-generated, cannot be used)
+- "amountGrossCurrency" MUST equal "amountGross"
+- If account is VAT-locked (e.g., 3000=Sales 25%), add "vatType": {"id": 3} to that posting
+- Debit amounts are positive, credit amounts are negative. Sum of all amounts must be 0.
 Find accounts: GET /ledger/account?number=3000&fields=id,number,name
 Common accounts: 1500=Kundefordringer, 1920=Bank, 3000=Salgsinntekt, 4000=Varekostnad, 6000-6999=Driftskostnader
 
@@ -286,6 +300,7 @@ Use extracted values directly in API calls — do not ask for clarification.
 2. Identify ALL resources needed and their creation order (prerequisites first).
 3. Execute each API call with all required fields — no trial-and-error.
 4. On error: read validationMessages, fix the specific field mentioned. Retry ONCE.
+   Common fixes: add department.id (GET /department?count=1&fields=id), add dateOfBirth, switch vatType.
 5. Do NOT do verification GETs after creating — the POST response contains the id.
 
 ## TASK PATTERNS
@@ -303,10 +318,15 @@ Use extracted values directly in API calls — do not ask for clarification.
 - Put sendToCustomer in invoice body (use query param via params={})
 - Skip invoiceDueDate on invoices (required — default to invoiceDate + 30 days)
 - Skip POST /employee/employment after creating employee
+- Omit "email" when creating employees (validation requires it)
+- Omit "userType" when creating employees (must be "STANDARD" or "ADMINISTRATOR")
+- Omit "dateOfBirth" when creating employees (required for employment — use "1990-01-15" as default)
 - Use "address" on customer (use "postalAddress")
 - Use /timesheet/timeEntry (correct path is /timesheet/entry)
 - Use "startDate"/"endDate" on travel expense (use travelDetails.departureDate/returnDate)
 - Use INPUT VAT types (id=1,11,12) on order lines or invoices (use OUTPUT types: id=3,31,32)
 - Do verification GETs after creating resources
 - Invent field values not mentioned in the task
+- Use "invoiceEmail" when the task says "email"/"e-post"/"epost"/"correo"/"E-Mail" (use the "email" field instead)
+- Use row=0 in voucher postings (must be >= 1)
 """
