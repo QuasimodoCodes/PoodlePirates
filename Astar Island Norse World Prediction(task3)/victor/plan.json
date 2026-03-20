@@ -84,7 +84,7 @@
     {
       "step_number": 6,
       "description": "Query Planner — src/observation/query_planner.py: given dynamic cell map, plan viewport queries. Strategy: 9 non-overlapping 15×15 tiles = full map scan (45 queries), 5 spare queries for re-querying highest-entropy dynamic zones. Assign queries across seeds evenly.",
-      "status": "pending",
+      "status": "complete",
       "files": ["src/observation/query_planner.py"],
       "math": "Anchors at [0,15,25] for both x and y — NOT [0,15,30]. Each tile is a full 15×15. Tiles at 25 overlap [25-29] with previous tile but guarantee full map coverage. 9×5=45 + 5 spare = 50 exactly.",
       "why_not_30": "x=30 + w=15 = x=45, out of bounds on a 40-wide map. x=25 + w=15 = x=40, exactly fits.",
@@ -93,7 +93,7 @@
     {
       "step_number": 7,
       "description": "Observation Runner — src/observation/runner.py: calls GET /budget first, executes query plan one at a time, saves raw response to data/observations/seed{seed}_x{x}_y{y}_{timestamp}.json after each call. Respects 5 req/sec rate limit with sleep(0.2).",
-      "status": "pending",
+      "status": "complete",
       "files": ["src/observation/runner.py"],
       "critical": "Save to disk IMMEDIATELY after each query. If crash at query 43, keep all 43. Sync with GET /budget before starting.",
       "parsing_gotcha": "response.width/height = full map (40×40), NOT viewport size. response.grid shape = viewport_h × viewport_w. Use response.viewport.x and .y to place cells onto the full 40×40 tensor.",
