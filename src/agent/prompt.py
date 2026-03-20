@@ -135,8 +135,10 @@ Alternative: convert existing order to invoice:
 ---
 
 ## 6. INVOICE PAYMENT ★ CRITICAL — this is a PUT with query params, NOT a POST ★
-Find invoice: GET /invoice?invoiceDateFrom=2025-01-01&invoiceDateTo=2026-12-31&invoiceNumber=X&count=5&fields=id,amount,amountCurrency
+Find invoice: GET /invoice?invoiceDateFrom=2025-01-01&invoiceDateTo=2027-12-31&customer.id=X&count=5&fields=id,invoiceNumber,amount,amountCurrency
   ★ MUST include invoiceDateFrom AND invoiceDateTo — both are REQUIRED ★
+  ★ Valid fields for /invoice: id, version, invoiceNumber, invoiceDate, invoiceDueDate, amount, amountCurrency, customer, isCredited, creditedInvoice, kid, comment, invoiceComment, orders, orderLines ★
+  ★ INVALID fields (will cause 400): description, outstandingAmount, order, balance — NEVER use these ★
 Register payment:
   PUT /invoice/{id}/:payment
   Query params (NOT body): paymentDate=YYYY-MM-DD, paymentTypeId=<from env hint>, paidAmount=<amount>
@@ -487,6 +489,7 @@ Use extracted values directly in API calls — do not ask for clarification.
 - Use nested objects in /incomingInvoice orderLines (use flat IDs: accountId, vatTypeId, NOT account:{id}, vatType:{id})
 - Assume resources exist on fresh accounts — always search first, create if not found
 - Query /invoice without invoiceDateFrom AND invoiceDateTo (both are REQUIRED)
+- Use "description", "outstandingAmount", "order", or "balance" in /invoice fields filter (they don't exist on InvoiceDTO — use id, invoiceNumber, amount, amountCurrency instead)
 - Create orders or invoices when the task says "set fixed price" — just PUT the project with isFixedPrice + fixedprice
 - Use "name" for dimension names (correct field is "dimensionName") or dimension values (correct is "displayName")
 - Use "accountingDimension":{"id":X} for dimension values (correct is "dimensionIndex": <integer>)
