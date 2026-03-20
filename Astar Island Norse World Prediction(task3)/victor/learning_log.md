@@ -29,6 +29,8 @@ Source: 15 analysis files × 1600 cells = 24,000 cells of ground truth data
 - [FIX] Layer C now uses real transition matrix instead of hand-coded spatial rules. transition_matrix.json saved to data/.
 - [RESULT] Offline test on all 15 ground truth files: avg=63.66, best=71.62, worst=51.19 — with ZERO queries. Uniform baseline ~1-5. Transition matrix is highly effective.
 - [STRATEGY] Submit transition-matrix-only prediction first (free), then spend 50 queries for Bayesian updates and resubmit.
+- [CV RESULT] Leave-one-round-out CV: 53.83 avg (range 38-67). Round f1dac9a9 scores 39 when excluded from training — its hidden parameters were significantly different. Round 4 expected 39-67 depending on parameters.
+- [KEY INSIGHT] Bayesian update (50 queries) is most important when round has unusual parameters — observations adapt the prior to the actual dynamics of THIS round.
 
 ---
 
