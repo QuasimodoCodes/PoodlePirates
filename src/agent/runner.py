@@ -252,6 +252,32 @@ async def run_agent(
     except Exception:
         pass  # 409 = already active, 403 = proxy blocks it — both fine
 
+    # Ensure a division exists (required for /salary/transaction)
+    division_id = None
+    try:
+        div_resp = client.get("/division", params={"count": 1, "fields": "id"})
+        div_values = div_resp.get("values", [])
+        if div_values:
+            division_id = div_values[0]["id"]
+        else:
+            # Create a default division so salary/transaction works
+            muni_resp = client.get("/municipality", params={"number": "0301", "count": 1, "fields": "id"})
+            muni_values = muni_resp.get("values", [])
+            muni_id = muni_values[0]["id"] if muni_values else 1
+            new_div = client.post("/division", body={
+                "name": "Hoveddivisjon",
+                "startDate": "2020-01-01",
+                "organizationNumber": "985365785",
+                "municipality": {"id": muni_id},
+                "municipalityDate": "2020-01-01",
+            })
+            division_id = new_div.get("value", {}).get("id")
+        if division_id:
+            env_hints.append(f"[Division id: {division_id} (use as division:{{\"id\":{division_id}}} when creating employment for salary tasks)]")
+            log.info("division_ready", run_id=run_id, division_id=division_id)
+    except Exception as e:
+        log.warning("division_setup_failed", run_id=run_id, error=str(e))
+
     try:
         # Ensure bank account 1920 has a bankAccountNumber (required for invoicing)
         acct_resp = client.get("/ledger/account", params={
@@ -319,8 +345,8 @@ async def run_agent(
         key_types = {2000: "Fastlønn", 2001: "Timelønn", 2002: "Bonus", 6000: "Skattetrekk"}
         found_st = {n: st_map[n] for n in key_types if n in st_map}
         if found_st:
-            st_hints = " | ".join(f"{n}({v['name']})={v['id']}" for n, v in sorted(found_st.items()))
-            env_hints.append(f"[Salary type IDs: {st_hints}]")
+            st_hints = " | ".join(f"type#{n}_{v['name'].replace(' ','_')}=id:{v['id']}" for n, v in sorted(found_st.items()))
+            env_hints.append(f"[Salary type IDs (use id: field, NOT the type number): {st_hints}]")
             log.info("salary_types_discovered", run_id=run_id, count=len(found_st))
     except Exception as e:
         log.warning("salary_type_discovery_failed", run_id=run_id, error=str(e))

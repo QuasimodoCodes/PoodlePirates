@@ -401,15 +401,26 @@ Body: {
   "payslips": [{
     "employee": {"id": <emp_id>},
     "specifications": [
-      {"salaryType": {"id": <salary_type_id_for_fastlønn>}, "rate": 36800, "count": 1, "description": "Grunnlønn"},
-      {"salaryType": {"id": <salary_type_id_for_bonus>}, "rate": 5000, "count": 1, "description": "Bonus"}
+      {"salaryType": {"id": <id_from_hint>}, "rate": 36800, "count": 1, "description": "Grunnlønn"},
+      {"salaryType": {"id": <id_from_hint>}, "rate": 5000, "count": 1, "description": "Bonus"}
     ]
   }]
 }
-★ Use "salaryType": {"id": X} — NOT "specType". Get IDs from the [Salary type IDs: ...] hint. ★
-★ salaryType number 2000 = Fastlønn, 2001 = Timelønn, 2002 = Bonus, 6000 = Skattetrekk ★
+★ Use "salaryType": {"id": X} — the id value from [Salary type IDs: ...] hint, NOT the type number ★
+★ Fastlønn=type#2000, Timelønn=type#2001, Bonus=type#2002, Skattetrekk=type#6000 ★
 
-If /salary/transaction fails (403 or 422), fall back to a DETAILED voucher with these postings:
+★ SALARY REQUIRES EMPLOYMENT WITH DIVISION ★
+If salary/transaction fails with "employee has no employment": create one FIRST:
+  POST /employee/employment body: {
+    "employee": {"id": X},
+    "startDate": "YYYY-MM-DD",
+    "isMainEmployer": true,
+    "division": {"id": <from [Division id: X] hint>}  ← REQUIRED for salary
+  }
+If employment already exists but salary fails with "not linked to company":
+  PUT /employee/employment/{id} body: {"id": X, "version": Y, "division": {"id": <from hint>}}
+
+If /salary/transaction still fails after fixing employment, fall back to a DETAILED voucher:
 ★ Use pre-discovered Account IDs from [Account IDs: ...] hint — do NOT call GET for these ★
   Row 1: Account 5000 (Lønn til ansatte) DEBIT = gross salary + bonus
   Row 2: Account 2600 (Skattetrekk) CREDIT = -(gross * 0.30)  [~30% tax withholding estimate]
