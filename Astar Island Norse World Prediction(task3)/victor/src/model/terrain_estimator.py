@@ -33,7 +33,9 @@ from src.model.initial_analyzer import SeedMap, CODE_TO_CLASS, STATIC_CODES
 # CONSTANTS
 # ─────────────────────────────────────────────
 
-ALPHA = 0.55          # Bayesian update weight for single observation
+ALPHA = 0.10          # Bayesian update weight for single observation
+                      # Offline test: α=0.55 → -14.6pts, α=0.30 → -4.5pts, α=0.10 → -0.6pts vs no-obs baseline
+                      # α=0.10 is nearly neutral but helps +2.4pts on unusual rounds
 FLOOR_DYNAMIC = 0.01  # floor for dynamic cells
 FLOOR_STATIC = 1e-5   # floor for static cells (Mountain/Ocean)
 N_CLASSES = config.NUM_TERRAIN_CLASSES

@@ -1,28 +1,15 @@
 """
 main.py — Full pipeline orchestrator for Astar Island Norse World Prediction.
 
-Stages:
-  1. Auth + find active round
-  2. Load initial states (free)
-  3. Check budget
-  4. Build query plan
-  5. Run observations (simulate queries) — or skip with --no-observe
-  6. Build predictions (transition matrix + Bayesian updates)
-  7. Validate tensors
-  8. Submit all 5 seeds
+Two-phase adaptive query strategy:
+  Phase 1 (25 queries): Fixed 5-tile spatial spread per seed → calibrate round dynamics
+  Phase 2 (25 queries): Entropy-guided targeting → focus budget on uncertain cells
 
 Usage:
-    # Full run (spends queries + submits):
-    python main.py
-
-    # Submit with transition matrix only — zero queries, get on the board:
-    python main.py --no-observe
-
-    # Dry run — plan queries but don't execute or submit:
-    python main.py --dry-run
-
-    # Just submit existing saved tensors:
-    python main.py --submit-only
+    python main.py                  # Full two-phase run
+    python main.py --no-observe     # Transition matrix only, zero queries
+    python main.py --dry-run        # Plan but don't execute or submit
+    python main.py --submit-only    # Submit existing saved tensors
 """
 
 import os
@@ -32,14 +19,16 @@ import argparse
 
 from src.api.client import AstarClient
 from src.model.initial_analyzer import analyze, build_seed_maps
-from src.model.terrain_estimator import estimate_all_seeds, load_transition_matrix
+from src.model.terrain_estimator import estimate_all_seeds, load_transition_matrix, build_observation_index
 from src.model.round_calibrator import calibrate, save_calibrated_matrix
-from src.observation.query_planner import build_query_plan, print_plan_summary
+from src.observation.adaptive_planner import (
+    build_phase1_queries, build_phase2_queries, print_phase_summary
+)
 from src.observation.runner import run as run_observations, load_all_observations
 from src.prediction.tensor_builder import build_and_save_all
 import config
 
-ROUND_ID = "fd3c92ff-3178-4dc9-8d9b-acf389b3982b"
+ROUND_ID = "ae78003a-4efe-425a-881a-d16a39bca0ad"
 
 
 def load_token() -> str:
@@ -60,10 +49,15 @@ def section(title: str) -> None:
     print(f"{'═'*60}")
 
 
+def load_raw_initial() -> dict:
+    with open(os.path.join(config.DATA_DIR, "initial_states.json")) as f:
+        return json.load(f)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--no-observe", action="store_true",
-                        help="Skip simulate queries, use transition matrix only")
+                        help="Skip queries, use transition matrix only")
     parser.add_argument("--dry-run", action="store_true",
                         help="Plan queries but don't execute or submit")
     parser.add_argument("--submit-only", action="store_true",
@@ -92,8 +86,8 @@ def main():
         print(f"  Seed {sm.seed_index}: {sm.n_static} static | "
               f"{sm.n_dynamic} dynamic | {len(sm.settlements)} settlements")
 
+    # ── Submit-only shortcut ─────────────────────────────────────────
     if args.submit_only:
-        # Load saved tensors and submit directly
         section("Submit Only — Loading saved tensors")
         tensors = []
         for seed_idx in range(config.NUM_SEEDS):
@@ -117,46 +111,77 @@ def main():
         print("  ⚠️  Budget exhausted — switching to --no-observe mode")
         args.no_observe = True
 
-    # ── 4. Query plan ────────────────────────────────────────────────
-    section("4. Query Plan")
-    queries = build_query_plan(seed_maps=seed_maps)
-    print_plan_summary(queries)
-
-    # ── 5. Observations ──────────────────────────────────────────────
-    section("5. Observations")
+    # ── No-observe shortcut ──────────────────────────────────────────
     if args.no_observe:
-        print("  Skipping simulate() queries — using transition matrix only.")
-        print("  Expected score: ~63 (based on offline test).")
-    elif args.dry_run:
-        print("  [DRY RUN] — would execute the following queries:")
-        run_observations(client, ROUND_ID, queries, dry_run=True)
+        section("4. Predictions (transition matrix only — no queries)")
+        print("  Skipping simulate() queries.")
+        tensors = estimate_all_seeds(seed_maps, observations=[])
+        section("5. Validate & Save Tensors")
+        build_and_save_all(tensors)
+        section("6. Submit")
+        if not args.dry_run:
+            submit_all(client, tensors, dry_run=False)
+        return
+
+    # ════════════════════════════════════════════════════════════════
+    # TWO-PHASE ADAPTIVE PIPELINE
+    # ════════════════════════════════════════════════════════════════
+
+    raw_initial = load_raw_initial()
+    historical  = load_transition_matrix(calibrated=False)
+
+    # ── 4. Phase 1 — Fixed spatial scan (25 queries) ─────────────────
+    section("4. Phase 1 — Spatial Scan (25 queries)")
+    phase1_queries = build_phase1_queries(seed_maps)
+    print_phase_summary(1, phase1_queries)
+
+    if args.dry_run:
+        print("  [DRY RUN] — would execute Phase 1 queries.")
     else:
-        run_observations(client, ROUND_ID, queries)
+        run_observations(client, ROUND_ID, phase1_queries)
 
-    # ── 6. Calibrate round prior ──────────────────────────────────────
-    section("6. Calibrate Round Prior")
-    observations = load_all_observations()
-    print(f"  Loaded {len(observations)} saved observation files.")
+    # ── 5. Calibrate after Phase 1 ───────────────────────────────────
+    section("5. Phase 1 Calibration")
+    obs_p1 = load_all_observations()
+    print(f"  Phase 1 observations loaded: {len(obs_p1)} files")
 
-    if not args.no_observe and observations:
-        with open(os.path.join(config.DATA_DIR, "initial_states.json")) as f:
-            raw_initial = json.load(f)
-        historical = load_transition_matrix(calibrated=False)
-        blended = calibrate(raw_initial, observations, historical, verbose=True)
-        save_calibrated_matrix(blended)
+    blended_p1 = calibrate(raw_initial, obs_p1, historical, verbose=True)
+    save_calibrated_matrix(blended_p1)
+
+    # ── 6. Intermediate predictions (for entropy targeting) ──────────
+    section("6. Intermediate Predictions (Phase 1 only)")
+    intermediate = estimate_all_seeds(seed_maps, observations=obs_p1)
+    print(f"  Intermediate tensors built — using for entropy-guided Phase 2 targeting.")
+
+    # ── 7. Phase 2 — Entropy-guided queries (25 queries) ─────────────
+    section("7. Phase 2 — Entropy-Guided Scan (25 queries)")
+    obs_index_p1 = build_observation_index(obs_p1)
+    phase2_queries = build_phase2_queries(seed_maps, obs_index_p1, intermediate)
+    print_phase_summary(2, phase2_queries)
+
+    if args.dry_run:
+        print("  [DRY RUN] — would execute Phase 2 queries.")
     else:
-        print("  Skipping calibration — no observations available.")
+        run_observations(client, ROUND_ID, phase2_queries)
 
-    # ── 7. Build predictions ──────────────────────────────────────────
-    section("7. Build Predictions")
-    tensors = estimate_all_seeds(seed_maps, observations=observations)
+    # ── 8. Final calibration (all 50 observations) ───────────────────
+    section("8. Final Calibration (all 50 observations)")
+    obs_all = load_all_observations()
+    print(f"  All observations loaded: {len(obs_all)} files")
 
-    # ── 8. Validate + save tensors ───────────────────────────────────
-    section("8. Validate & Save Tensors")
+    blended_final = calibrate(raw_initial, obs_all, historical, verbose=True)
+    save_calibrated_matrix(blended_final)
+
+    # ── 9. Final predictions ─────────────────────────────────────────
+    section("9. Final Predictions")
+    tensors = estimate_all_seeds(seed_maps, observations=obs_all)
+
+    # ── 10. Validate & save ──────────────────────────────────────────
+    section("10. Validate & Save Tensors")
     build_and_save_all(tensors)
 
-    # ── 9. Submit ────────────────────────────────────────────────────
-    section("9. Submit")
+    # ── 11. Submit ───────────────────────────────────────────────────
+    section("11. Submit")
     if args.dry_run:
         print("  [DRY RUN] — would submit 5 tensors. Skipping.")
         return
@@ -178,7 +203,7 @@ def submit_all(client: AstarClient, tensors, dry_run: bool = False):
         resp = client.submit(ROUND_ID, seed_idx, tensor)
         print(f"  Seed {seed_idx}: {'✅' if resp.success else '❌'}  {resp.message}")
         results.append({"seed_index": seed_idx, "success": resp.success})
-        time.sleep(0.6)   # 2 req/sec rate limit for submit
+        time.sleep(0.6)
 
     if results:
         with open(scores_path, "w") as f:

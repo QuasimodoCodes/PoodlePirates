@@ -28,7 +28,7 @@ import config
 from src.model.initial_analyzer import CODE_TO_CLASS, STATIC_CODES
 
 N_CLASSES    = config.NUM_TERRAIN_CLASSES
-N_HIST       = 300   # virtual historical sample weight — tune if rounds vary a lot
+N_HIST       = 2000  # virtual historical sample weight — conservative: ~5000 Plains obs → 71% round weight
 CLASS_NAMES  = ["Empty", "Settl", "Port", "Ruin", "Forest", "Mtn"]
 CODE_NAMES   = {0: "Empty", 1: "Settlement", 2: "Port", 3: "Ruin",
                 4: "Forest", 5: "Mountain", 10: "Ocean", 11: "Plains"}

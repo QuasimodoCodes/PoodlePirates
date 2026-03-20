@@ -66,12 +66,23 @@ When this table is filled, replace Layer C spatial rules with `transition_prior[
 
 ---
 
+## Round 5 Results — 2026-03-20
+
+- [RESULT] Leaderboard score: **43.9 / 100** — rank #103 of 144. Major drop from round 4.
+- [WRONG] Bayesian update (α=0.55) HURT by ~20 points. Offline test (no Bayesian) gives ~64 on round 5 data; actual with Bayesian = 43.9.
+- [LEARN] Single simulate() observation is one stochastic run. High-variance rounds make this very misleading. Historical matrix average is more reliable than one noisy observation.
+- [LEARN] Round 5 was likely high-variance (hidden parameters caused wider spread of outcomes). α=0.55 too aggressively trusted single observations.
+- [FIX] Lowered α from 0.55 → 0.30. Transition matrix now built from 5 rounds (40,000 cells).
+
+---
+
 ## α Calibration History
 
 | Round | α used | Result | Next α |
 |-------|--------|--------|--------|
-| 4     | 0.55   | 71.7   | 0.55 (keep) |
-| 5     | 0.55   | pending | — |
+| 4     | 0.55   | 71.7   | — |
+| 5     | 0.55   | 43.9   | 0.30 ← too high, single obs misleading on high-variance rounds |
+| 6     | 0.30   | pending | — |
 
 ---
 
