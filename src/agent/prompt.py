@@ -189,17 +189,26 @@ Optional: departmentNumber, departmentManager:{id}
 ## 11. PROJECT
 POST /project
 Required: name, startDate (YYYY-MM-DD), projectManager:{id}
-Optional: customer:{id}, endDate, description, department:{id}
+Optional: customer:{id}, endDate, description, department:{id}, isFixedPrice (bool), fixedprice (number)
 
 Steps:
-1. If customer mentioned → POST /customer first
+1. If customer mentioned → search first: GET /customer?organizationNumber=X, create only if not found
 2. For project manager:
-   a. If task mentions a specific person → create that employee (with full fields: email, userType, dateOfBirth)
-   b. Then POST /project with projectManager:{id: <new_emp_id>}
+   a. If task mentions a specific person → search first: GET /employee?email=X, create only if not found
+   b. Then POST /project with projectManager:{id: <emp_id>}
    c. If POST fails with "not given access as project manager" error → GET /employee?count=1&fields=id to find
       the first (admin) employee and retry with their ID as projectManager
 3. POST /project {name, startDate, projectManager:{id}, customer:{id}}
    If no startDate given, use TODAY.
+
+★ SET FIXED PRICE (fastpris, precio fijo, Festpreis, prix fixe, preço fixo) ★
+When the task says to set a fixed price on a project:
+1. Search for the project: GET /project?name=<name>&count=5&fields=id,version,name,isFixedPrice,fixedprice
+   - If not found by name, try: GET /project?count=50&fields=id,version,name,customer(id)
+2. If the project doesn't exist, create it (POST /project)
+3. PUT /project/{id} with body: {"id": <id>, "version": <version>, "isFixedPrice": true, "fixedprice": <amount>}
+   ★ "fixedprice" is a FIELD ON THE PROJECT — it is NOT an invoice or order amount ★
+   ★ Do NOT create orders or invoices for this task — just update the project ★
 
 To add an activity to a project:
 POST /project/projectActivity  body: {"project": {"id": <proj_id>}, "activity": {"id": <act_id>}}
@@ -295,11 +304,23 @@ Common accounts: 1500=Kundefordringer, 1920=Bank, 3000=Salgsinntekt, 4000=Vareko
 
 ---
 
-## 16. CUSTOM DIMENSIONS
-POST /ledger/accountingDimensionName  body: {"name": "Region"}  → get dimension id
-POST /ledger/accountingDimensionValue  body: {"accountingDimension": {"id": <dim_id>}, "name": "Sør-Norge"}
+## 16. CUSTOM DIMENSIONS ★ FIELD NAMES ARE DIFFERENT FROM OTHER ENDPOINTS ★
+Step 1: Create the dimension name
+  POST /ledger/accountingDimensionName  body: {"dimensionName": "Region"}
+  ★ Field is "dimensionName" NOT "name" ★
+  → Response includes dimensionIndex (integer, e.g. 1) — save this for Step 2.
 
-Search: GET /ledger/accountingDimensionName?count=20&fields=id,name
+Step 2: Create dimension values (one POST per value)
+  POST /ledger/accountingDimensionValue  body: {"dimensionIndex": <from step 1>, "displayName": "Nord-Norge", "number": "1"}
+  ★ "dimensionIndex" is an INTEGER from the dimension name response, NOT a nested object ★
+  ★ "displayName" NOT "name" — the value's visible label ★
+  ★ "number" is REQUIRED — use "1", "2", "3" etc. ★
+
+Step 3: If the task also asks to post a voucher with the dimension:
+  Use "freeAccountingDimension1": {"id": <value_id>} on the voucher posting
+  (or freeAccountingDimension2/3 depending on which dimension slot was assigned)
+
+Search: GET /ledger/accountingDimensionName?count=20&fields=id,dimensionName,dimensionIndex
 
 ---
 
@@ -408,12 +429,13 @@ Use extracted values directly in API calls — do not ask for clarification.
    ★ Pay close attention to keywords: "bounced"/"avvist"/"retur" = REVERSE payment, NOT credit note ★
    ★ "Payroll"/"lønn"/"Gehalt"/"salaire" = salary with tax deductions, NOT simple voucher ★
    ★ "Credit note"/"kreditnota"/"Gutschrift" = invoice cancellation via :createCreditNote ★
+   ★ "fastpris"/"fixed price"/"precio fijo" = SET fixedprice on project, do NOT create invoices ★
 2. Identify ALL resources needed and their creation order (prerequisites first).
    ★ The account starts EMPTY — no customers, suppliers, employees exist. Create them before referencing. ★
    ★ BUT some resources MAY be pre-created by the competition — always SEARCH first, create only if not found ★
 3. Execute each API call with all required fields — no trial-and-error.
 4. On error: read validationMessages, fix the specific field mentioned. Retry ONCE.
-   If error says "Feltet eksisterer ikke" (field doesn't exist) → call tripletex_schema to discover correct field names.
+   ★ If error says "Feltet eksisterer ikke" (field doesn't exist) → IMMEDIATELY call tripletex_schema to discover correct field names. Do NOT guess or retry with variations. ★
    Common fixes: add department.id (GET /department?count=1&fields=id), add dateOfBirth, switch vatType.
 5. Do NOT do verification GETs after creating — the POST response contains the id.
 
@@ -425,7 +447,9 @@ Use extracted values directly in API calls — do not ask for clarification.
 - "Bounced/returned payment" (avvist, retur, Rücklastschrift, bounced, devuelto) → GET /invoice → PUT /invoice/{id}/:payment with NEGATIVE paidAmount
 - "Credit note" (kreditnota, Gutschrift, nota de crédito) → GET /invoice → PUT /invoice/{id}/:createCreditNote (query params!)
 - "Payroll/salary" (lønn, Gehalt, salaire, salario) → POST /salary/transaction OR detailed voucher (section 19)
+- "Set fixed price" (fastpris, sett fastpris, precio fijo, Festpreis, prix fixe) → Search project by name → PUT /project/{id} with isFixedPrice:true + fixedprice:<amount> (section 11) ★ Do NOT create orders/invoices ★
 - "Create project for customer" → POST /customer → POST /employee (+ employment) → POST /project
+- "Custom dimension" (dimensjon, Dimension, dimensión, dimension) → POST /ledger/accountingDimensionName + POST /ledger/accountingDimensionValue (section 16)
 - "Supplier/incoming invoice" → Find/create supplier → POST /incomingInvoice?sendTo=ledger (section 17)
 - "Register supplier invoice with VAT" → Find/create supplier → POST /incomingInvoice?sendTo=ledger
 - "Create X" → POST /X with all fields
@@ -455,4 +479,8 @@ Use extracted values directly in API calls — do not ask for clarification.
 - Use nested objects in /incomingInvoice orderLines (use flat IDs: accountId, vatTypeId, NOT account:{id}, vatType:{id})
 - Assume resources exist on fresh accounts — always search first, create if not found
 - Query /invoice without invoiceDateFrom AND invoiceDateTo (both are REQUIRED)
+- Create orders or invoices when the task says "set fixed price" — just PUT the project with isFixedPrice + fixedprice
+- Use "name" for dimension names (correct field is "dimensionName") or dimension values (correct is "displayName")
+- Use "accountingDimension":{"id":X} for dimension values (correct is "dimensionIndex": <integer>)
+- Keep retrying the SAME wrong field name on 422 — call tripletex_schema instead to discover correct fields
 """
