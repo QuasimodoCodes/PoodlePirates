@@ -1,0 +1,53 @@
+[
+  {
+    "step_number": 1,
+    "description": "Project scaffolding: create folder structure, requirements.txt, .env.example, and .gitignore.",
+    "status": "complete"
+  },
+  {
+    "step_number": 2,
+    "description": "FastAPI server + dynamic Tripletex client: POST /solve + POST / endpoints, per-request credentials.",
+    "status": "complete"
+  },
+  {
+    "step_number": 3,
+    "description": "Gemini tool-calling agent: agentic loop with 4 tools (GET/POST/PUT/DELETE), model fallback chain.",
+    "status": "complete"
+  },
+  {
+    "step_number": 4,
+    "description": "Comprehensive system prompt: 18 task type templates with exact API paths, field names, and patterns.",
+    "status": "complete"
+  },
+  {
+    "step_number": 5,
+    "description": "File handling: PDF text extraction via pdfplumber, image pass-through, CSV/text decoding.",
+    "status": "complete"
+  },
+  {
+    "step_number": 6,
+    "description": "Error handling: tenacity retry (429/5xx only), RetryError unwrapping, empty response guard, async sleep.",
+    "status": "complete"
+  },
+  {
+    "step_number": 7,
+    "description": "API accuracy audit: Verified all endpoints against OpenAPI spec and sandbox. Fixed invoice payment (PUT /:payment), credit note (PUT /:createCreditNote), timesheet (/timesheet/entry), travel expense (travelDetails), VAT types (output=3, input=1), currency IDs (NOK=1).",
+    "status": "complete"
+  },
+  {
+    "step_number": 8,
+    "description": "Deployment via ngrok: persistent HTTPS URL, server on port 8000 with uvicorn --reload.",
+    "status": "complete"
+  },
+  {
+    "step_number": 9,
+    "description": "Sandbox testing: verify all task types work against sandbox API. Employee+employment, customer, product, project, department, travel expense confirmed working.",
+    "status": "in_progress"
+  },
+  {
+    "step_number": 10,
+    "description": "Competition submission: submit to platform, target all 30 task types passing, optimize for efficiency bonus.",
+    "status": "pending"
+  }
+]
+
