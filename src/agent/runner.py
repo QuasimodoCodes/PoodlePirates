@@ -10,10 +10,12 @@ Flow:
 """
 import asyncio
 import base64
+import functools
 import io
 import json
 import time
 
+import requests as http_requests
 import structlog
 from google import genai
 from google.genai import types
@@ -26,6 +28,94 @@ log = structlog.get_logger()
 
 MAX_ITERATIONS = 20
 TIMEOUT_SECONDS = 260
+
+
+# ── OpenAPI schema lookup ──────────────────────────────────────────────────────
+
+@functools.lru_cache(maxsize=1)
+def _load_openapi_spec() -> dict:
+    """Download and cache the OpenAPI spec from Tripletex sandbox."""
+    try:
+        resp = http_requests.get(
+            "https://kkpqfuj-amager.tripletex.dev/v2/openapi.json", timeout=30
+        )
+        return resp.json()
+    except Exception:
+        return {}
+
+
+def _lookup_schema(path: str, method: str = "post") -> str:
+    """Extract request body schema for a given API endpoint."""
+    try:
+        spec = _load_openapi_spec()
+        if not spec:
+            return "Schema not available"
+
+        method = method.lower()
+        endpoint = spec.get("paths", {}).get(path, {}).get(method, {})
+        if not endpoint:
+            # Try finding close matches
+            all_paths = [p for p in spec.get("paths", {}) if path.rstrip("/") in p]
+            if all_paths:
+                return f"Endpoint {method.upper()} {path} not found. Similar: {', '.join(all_paths[:5])}"
+            return f"No {method.upper()} endpoint found for {path}"
+
+        schemas = spec.get("components", {}).get("schemas", {})
+        results = []
+
+        # Request body (POST/PUT)
+        rb = endpoint.get("requestBody", {}).get("content", {})
+        for ct, ct_def in rb.items():
+            ref = ct_def.get("schema", {}).get("$ref", "")
+            model_name = ref.split("/")[-1] if ref else ""
+            if model_name and model_name in schemas:
+                results.append(_format_model(model_name, schemas[model_name], schemas))
+
+        # Query parameters (GET/PUT action endpoints)
+        params = endpoint.get("parameters", [])
+        param_lines = []
+        for p in params:
+            if p.get("in") == "query":
+                req = " REQUIRED" if p.get("required") else ""
+                ptype = p.get("schema", {}).get("type", "string")
+                param_lines.append(f"  ?{p['name']}: {ptype}{req}")
+        if param_lines:
+            results.append("Query params:\n" + "\n".join(param_lines))
+
+        return "\n".join(results) if results else f"No schema found for {method.upper()} {path}"
+    except Exception as e:
+        return f"Schema lookup error: {e}"
+
+
+def _format_model(name: str, model: dict, all_schemas: dict, depth: int = 0) -> str:
+    """Format a model's writable fields, resolving nested refs one level deep."""
+    if depth > 1:
+        return f"{name}: (nested object — use {{\"id\": <int>}})"
+
+    required = set(model.get("required", []))
+    lines = [f"Model: {name}"]
+    for prop, defn in sorted(model.get("properties", {}).items()):
+        if defn.get("readOnly"):
+            continue
+        ref = defn.get("$ref", "")
+        ptype = defn.get("type", "")
+        enum = defn.get("enum", [])
+
+        if ref:
+            ref_name = ref.split("/")[-1]
+            ref_model = all_schemas.get(ref_name, {})
+            # For reference objects, show if they just need an id
+            if "id" in ref_model.get("properties", {}):
+                ptype = f'{ref_name} (use {{"id": <int>}})'
+            else:
+                ptype = ref_name
+        elif not ptype:
+            ptype = "object"
+
+        req = " REQUIRED" if prop in required else ""
+        enum_str = f" enum={enum}" if enum else ""
+        lines.append(f"  {prop}: {ptype}{req}{enum_str}")
+    return "\n".join(lines)
 
 # ── Gemini tool declarations ───────────────────────────────────────────────────
 
@@ -81,6 +171,18 @@ TOOLS = [
                     required=["path"],
                 ),
             ),
+            types.FunctionDeclaration(
+                name="tripletex_schema",
+                description="Look up the API schema for any Tripletex endpoint. Returns the correct field names and types. Use this when you get 422 errors about unknown fields, or before calling an unfamiliar endpoint.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "path": types.Schema(type=types.Type.STRING, description="API path e.g. '/travelExpense/cost'"),
+                        "method": types.Schema(type=types.Type.STRING, description="HTTP method: 'get', 'post', or 'put'. Default: 'post'"),
+                    },
+                    required=["path"],
+                ),
+            ),
         ]
     )
 ]
@@ -99,6 +201,9 @@ def _execute_tool(name: str, args: dict, client: TripletexClient) -> dict:
         elif name == "tripletex_delete":
             client.delete(args["path"])
             return {"status": "deleted"}
+        elif name == "tripletex_schema":
+            schema_text = _lookup_schema(args["path"], args.get("method", "post"))
+            return {"schema": schema_text}
         else:
             return {"error": f"Unknown tool: {name}"}
     except Exception as exc:

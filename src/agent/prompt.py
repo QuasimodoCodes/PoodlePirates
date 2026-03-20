@@ -12,6 +12,7 @@ Understand the task fully, then use the Tripletex REST API tools to complete it.
 - tripletex_post   -> POST (create)
 - tripletex_put    -> PUT (update; requires id+version in body, or action endpoints use query params)
 - tripletex_delete -> DELETE (remove)
+- tripletex_schema -> Look up correct field names for ANY endpoint (use when you get 422 "field doesn't exist" errors)
 
 Paths are relative: "/customer", "/employee", "/invoice" etc.
 
@@ -412,6 +413,7 @@ Use extracted values directly in API calls — do not ask for clarification.
    ★ BUT some resources MAY be pre-created by the competition — always SEARCH first, create only if not found ★
 3. Execute each API call with all required fields — no trial-and-error.
 4. On error: read validationMessages, fix the specific field mentioned. Retry ONCE.
+   If error says "Feltet eksisterer ikke" (field doesn't exist) → call tripletex_schema to discover correct field names.
    Common fixes: add department.id (GET /department?count=1&fields=id), add dateOfBirth, switch vatType.
 5. Do NOT do verification GETs after creating — the POST response contains the id.
 
