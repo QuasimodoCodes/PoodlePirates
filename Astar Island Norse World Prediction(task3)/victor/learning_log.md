@@ -27,6 +27,8 @@ Source: 15 analysis files × 1600 cells = 24,000 cells of ground truth data
 - [LEARN] Plains mostly stay Empty (83.2%) but 11.6% become Settlement — expansion from nearby settlements is the dominant dynamic force on the map.
 - [LEARN] Ports collapse even more than Settlements: only 21% survive as Port. 47.2% become Empty, 21.1% become Forest.
 - [FIX] Layer C now uses real transition matrix instead of hand-coded spatial rules. transition_matrix.json saved to data/.
+- [RESULT] Offline test on all 15 ground truth files: avg=63.66, best=71.62, worst=51.19 — with ZERO queries. Uniform baseline ~1-5. Transition matrix is highly effective.
+- [STRATEGY] Submit transition-matrix-only prediction first (free), then spend 50 queries for Bayesian updates and resubmit.
 
 ---
 
