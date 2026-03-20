@@ -110,10 +110,20 @@ If VAT type is unknown or task doesn't specify, try id=3 first. If 422, try id=0
 ## 5. INVOICE (create from order)
 Two steps: first create order, then create invoice.
 Step 1: POST /order (see above) → get order_id
+  - MUST include deliveryDate (use orderDate if not specified in task)
 Step 2: POST /invoice
   Body: {"orders": [{"id": <order_id>}], "invoiceDate": "YYYY-MM-DD", "invoiceDueDate": "YYYY-MM-DD"}
   - invoiceDueDate is REQUIRED. Default: invoiceDate + 30 days.
   - Do NOT put sendToCustomer in body. Use params={"sendToCustomer": true} instead.
+
+★ If POST /invoice fails with 422:
+  - Read the FULL error message in validationMessages
+  - Common fixes:
+    a) "deliveryDate" → add deliveryDate to the order: PUT /order/{id} with deliveryDate
+    b) "invoiceEmail" → update customer with invoiceEmail: PUT /customer/{id} with invoiceEmail set to the customer's email
+    c) "payment" or "betaling" → add paymentTypeId: params={"paymentTypeId": 0}
+    d) Any other field → read the error, fix the field, retry
+  - NEVER give up after one failure. Read the error and fix it.
 
 Alternative: convert existing order to invoice:
   PUT /order/{id}/:invoice  with query params: invoiceDate, sendToCustomer, sendType

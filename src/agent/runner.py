@@ -188,6 +188,7 @@ async def run_agent(
     user_parts = [date_hint] + file_parts + [types.Part.from_text(text=prompt)]
     contents.append(types.Content(role="user", parts=user_parts))
 
+    nudge_count = 0
     for iteration in range(MAX_ITERATIONS):
         if time.time() - start > TIMEOUT_SECONDS:
             log.warning("agent_timeout", run_id=run_id, iteration=iteration)
@@ -268,14 +269,20 @@ async def run_agent(
 
         log.info("gemini_response", run_id=run_id, function_calls=[fc.name for fc in function_calls])
 
-        # No function calls → done (but retry once if first iteration — Gemini may have hallucinated)
+        # No function calls → done (but nudge up to 2 times if task isn't finished)
         if not function_calls:
-            if iteration == 0 and prompt.strip().lower() != "test":
-                # First response with no tool calls — nudge Gemini to actually do the task
-                log.warning("no_tools_first_iteration", run_id=run_id)
-                contents.append(types.Content(role="user", parts=[
-                    types.Part.from_text(text="You did not call any tools. Please use the tripletex_post/tripletex_get tools to complete the task. Do not just describe what to do — actually call the API.")
-                ]))
+            if nudge_count < 2 and prompt.strip().lower() != "test":
+                nudge_count += 1
+                if nudge_count == 1:
+                    log.warning("no_tools_nudge", run_id=run_id, iteration=iteration, nudge=nudge_count)
+                    contents.append(types.Content(role="user", parts=[
+                        types.Part.from_text(text="You did not call any tools. Please use the tripletex_post/tripletex_get tools to complete the task. Do not just describe what to do — actually call the API.")
+                    ]))
+                else:
+                    log.warning("no_tools_nudge", run_id=run_id, iteration=iteration, nudge=nudge_count)
+                    contents.append(types.Content(role="user", parts=[
+                        types.Part.from_text(text="The task is NOT complete. You MUST call the API tools to finish it. If the last API call returned an error, read the error carefully and fix the request. Try a different approach if needed. DO NOT give up.")
+                    ]))
                 continue
             log.info("agent_complete", run_id=run_id, iterations=iteration + 1)
             break
@@ -287,7 +294,7 @@ async def run_agent(
             log.info("tool_call", run_id=run_id, tool=fc.name, inputs=args)
             result = _execute_tool(fc.name, args, client)
             log.info("tool_result", run_id=run_id, tool=fc.name,
-                     result_preview=json.dumps(result, default=str)[:200])
+                     result_preview=json.dumps(result, default=str)[:500])
 
             tool_response_parts.append(
                 types.Part.from_function_response(
