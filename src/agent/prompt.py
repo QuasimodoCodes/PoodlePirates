@@ -132,11 +132,20 @@ Alternative: convert existing order to invoice:
 
 ## 6. INVOICE PAYMENT ★ CRITICAL — this is a PUT with query params, NOT a POST ★
 Find invoice: GET /invoice?invoiceNumber=X&count=5&fields=id,amount,amountCurrency
+  - MUST include invoiceDateFrom and invoiceDateTo params (e.g., "2025-01-01" to "2026-12-31")
 Register payment:
   PUT /invoice/{id}/:payment
   Query params (NOT body): paymentDate=YYYY-MM-DD, paymentTypeId=0, paidAmount=<amount>
   Use tripletex_put with path="/invoice/{id}/:payment", body={}, params={"paymentDate":"...", "paymentTypeId": 0, "paidAmount": <float>}
   paymentTypeId=0 means auto-detect. paidAmountCurrency is optional (for foreign currency invoices).
+
+★ BOUNCED/RETURNED PAYMENT (betaling avvist, retur, Rücklastschrift, pago devuelto, bounced) ★
+  This is NOT a credit note! A bounced payment means the payment was registered but the bank returned it.
+  Fix: Register a NEGATIVE payment to reverse:
+    1. GET /invoice with customer filter + invoiceDateFrom/To → find the invoice
+    2. PUT /invoice/{id}/:payment with paidAmount=NEGATIVE (e.g., -36875.0)
+       params={"paymentDate":"YYYY-MM-DD", "paymentTypeId": 0, "paidAmount": -36875.0}
+  This reverses the original payment. Do NOT use :createCreditNote for bounced payments.
 
 ---
 
@@ -328,7 +337,41 @@ If POST /incomingInvoice fails with 403 or 422, fall back to voucher approach:
 ## 18. DELETE / REVERSE operations
 For DELETE: first GET to find id, then DELETE /resource/{id}
 For invoice credit note: PUT /invoice/{id}/:createCreditNote (see section 7)
-For voucher reversal: PUT /ledger/voucher/{id}/:reverse body={} params={}
+For voucher reversal: PUT /ledger/voucher/{id}/:reverse body={} params={"date":"YYYY-MM-DD"}
+
+---
+
+## 19. PAYROLL / SALARY (lønn, Gehalt, salario, salaire)
+★ Payroll requires PROPER accounting postings — not just a simple salary-to-bank voucher ★
+
+POST /salary/transaction
+Body: {
+  "date": "YYYY-MM-DD",
+  "year": 2026,
+  "month": 3,
+  "payslips": [{
+    "employee": {"id": <emp_id>},
+    "specifications": [
+      {"specType": "SALARY", "rate": 36800, "count": 1, "description": "Grunnlønn"}
+    ]
+  }]
+}
+
+If /salary/transaction fails (403 or 422), fall back to a DETAILED voucher with these postings:
+  Row 1: Account 5000 (Lønn til ansatte) DEBIT = gross salary + bonus
+  Row 2: Account 2600 (Skattetrekk) CREDIT = -(gross * 0.30)  [~30% tax withholding estimate]
+  Row 3: Account 2770 (Arbeidsgiveravgift) DEBIT = gross * 0.141 [14.1% employer social security]
+  Row 4: Account 2780 (Påløpte feriepenger) CREDIT = -(gross * 0.12) [12% holiday pay accrual]
+  Row 5: Account 1920 (Bank) CREDIT = -(gross - tax)  [net pay]
+  Row 6: Account 2780 offset or 5000 for employer costs
+
+Simplified minimum (if unsure about exact rates):
+  Row 1: Account 5000 DEBIT = total gross (salary + bonus)
+  Row 2: Account 2600 CREDIT = -(total gross * 0.30)  [tax]
+  Row 3: Account 1920 CREDIT = -(total gross * 0.70)  [net to bank]
+  ★ The sum of all postings MUST be 0 ★
+
+Always look up account IDs: GET /ledger/account?number=5000&fields=id (same for 2600, 2770, 1920)
 
 ---
 
@@ -339,30 +382,41 @@ Use extracted values directly in API calls — do not ask for clarification.
 ---
 
 ## STRATEGY (follow this exactly)
-1. Read and understand the task — identify pattern (create / modify / delete / multi-step).
+1. Read and understand the task — identify the EXACT pattern from the list below.
+   ★ Pay close attention to keywords: "bounced"/"avvist"/"retur" = REVERSE payment, NOT credit note ★
+   ★ "Payroll"/"lønn"/"Gehalt"/"salaire" = salary with tax deductions, NOT simple voucher ★
+   ★ "Credit note"/"kreditnota"/"Gutschrift" = invoice cancellation via :createCreditNote ★
 2. Identify ALL resources needed and their creation order (prerequisites first).
    ★ The account starts EMPTY — no customers, suppliers, employees exist. Create them before referencing. ★
+   ★ BUT some resources MAY be pre-created by the competition — always SEARCH first, create only if not found ★
 3. Execute each API call with all required fields — no trial-and-error.
 4. On error: read validationMessages, fix the specific field mentioned. Retry ONCE.
    Common fixes: add department.id (GET /department?count=1&fields=id), add dateOfBirth, switch vatType.
 5. Do NOT do verification GETs after creating — the POST response contains the id.
 
-## TASK PATTERNS
+## TASK PATTERNS (match the task to the FIRST pattern that fits)
+- "Create employee" → POST /employee (with email, userType, dateOfBirth) → POST /employee/employment
+- "Create customer" → POST /customer with all fields
+- "Create invoice for customer" → POST /customer (if needed) → POST /order (with orderLines + deliveryDate) → POST /invoice
+- "Register payment" → GET /invoice (with invoiceDateFrom/To) → PUT /invoice/{id}/:payment (query params!)
+- "Bounced/returned payment" (avvist, retur, Rücklastschrift, bounced, devuelto) → GET /invoice → PUT /invoice/{id}/:payment with NEGATIVE paidAmount
+- "Credit note" (kreditnota, Gutschrift, nota de crédito) → GET /invoice → PUT /invoice/{id}/:createCreditNote (query params!)
+- "Payroll/salary" (lønn, Gehalt, salaire, salario) → POST /salary/transaction OR detailed voucher (section 19)
+- "Create project for customer" → POST /customer → POST /employee (+ employment) → POST /project
+- "Supplier/incoming invoice" → Find/create supplier → POST /incomingInvoice?sendTo=ledger (section 17)
+- "Register supplier invoice with VAT" → Find/create supplier → POST /incomingInvoice?sendTo=ledger
 - "Create X" → POST /X with all fields
 - "Update X" → GET /X?name=Y&fields=id,version,* → PUT /X/{id} with {id, version, fields}
 - "Delete X" → GET /X?...&fields=id → DELETE /X/{id}
-- "Create invoice for customer" → POST /customer → POST /order (with orderLines) → POST /invoice
-- "Register payment" → GET /invoice?...&fields=id,amount → PUT /invoice/{id}/:payment (query params!)
-- "Credit note" → GET /invoice → PUT /invoice/{id}/:createCreditNote (query params!)
-- "Create project for customer" → POST /customer → POST /employee (+ employment) → POST /project
-- "Supplier invoice / incoming invoice" → POST /supplier (if needed) → POST /ledger/voucher (see section 17)
-- "Register supplier invoice with VAT" → Create supplier → Create voucher with expense + VAT + payable postings
 
 ## NEVER
+- Use :createCreditNote for bounced/returned payments (use PUT /:payment with NEGATIVE paidAmount instead)
+- Use a single debit/credit voucher for payroll (must include tax withholding at minimum)
 - Use POST for invoice payment (it's PUT /invoice/{id}/:payment with query params)
 - Use POST for credit note (it's PUT /invoice/{id}/:createCreditNote with query params)
 - Put sendToCustomer in invoice body (use query param via params={})
 - Skip invoiceDueDate on invoices (required — default to invoiceDate + 30 days)
+- Skip deliveryDate on orders (required — use orderDate if not specified)
 - Skip POST /employee/employment after creating employee
 - Omit "email" when creating employees (validation requires it)
 - Omit "userType" when creating employees (must be "STANDARD" or "ADMINISTRATOR")
@@ -377,4 +431,5 @@ Use extracted values directly in API calls — do not ask for clarification.
 - Use row=0 in voucher postings (must be >= 1)
 - Use nested objects in /incomingInvoice orderLines (use flat IDs: accountId, vatTypeId, NOT account:{id}, vatType:{id})
 - Assume resources exist on fresh accounts — always search first, create if not found
+- Query /invoice without invoiceDateFrom AND invoiceDateTo (both are REQUIRED)
 """
