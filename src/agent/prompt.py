@@ -264,33 +264,54 @@ Search: GET /ledger/accountingDimensionName?count=20&fields=id,name
 
 ## 17. INCOMING / SUPPLIER INVOICE ★ ALWAYS CREATE SUPPLIER FIRST IF NEEDED ★
 Steps:
-1. Search supplier: GET /supplier?organizationNumber=X&count=5&fields=id
-   - If not found → POST /supplier {name, organizationNumber}
+1. Search supplier: GET /supplier?organizationNumber=X&count=5&fields=id,name
+   - If not found → POST /supplier {name, organizationNumber, isSupplier: true}
 2. Find expense account: GET /ledger/account?number=XXXX&fields=id,number,name
-3. Create the supplier invoice as a manual VOUCHER (the /incomingInvoice endpoint is unreliable):
+3. Create the supplier invoice:
 
-POST /ledger/voucher
+POST /incomingInvoice?sendTo=ledger
 Body: {
-  "date": "YYYY-MM-DD",
-  "description": "Supplier invoice <invoiceNumber> - <supplier_name>",
-  "postings": [
-    {"row": 1, "date": "YYYY-MM-DD", "account": {"id": <expense_acct_id>}, "amount": <net_amount>, "amountGross": <net_amount>, "amountGrossCurrency": <net_amount>, "currency": {"id": 1}},
-    {"row": 2, "date": "YYYY-MM-DD", "account": {"id": <vat_acct_id>}, "amount": <vat_amount>, "amountGross": <vat_amount>, "amountGrossCurrency": <vat_amount>, "currency": {"id": 1}},
-    {"row": 3, "date": "YYYY-MM-DD", "account": {"id": <payable_acct_id>}, "amount": -<total_ttc>, "amountGross": -<total_ttc>, "amountGrossCurrency": -<total_ttc>, "currency": {"id": 1}, "supplier": {"id": <supplier_id>}}
+  "invoiceHeader": {
+    "vendorId": <supplier_id_integer>,
+    "invoiceDate": "YYYY-MM-DD",
+    "dueDate": "YYYY-MM-DD",
+    "currencyId": 1,
+    "invoiceAmount": <total_including_vat>,
+    "invoiceNumber": "INV-xxx",
+    "description": "..."
+  },
+  "orderLines": [
+    {
+      "externalId": "line-1",
+      "row": 1,
+      "description": "...",
+      "accountId": <expense_account_id_integer>,
+      "amountInclVat": <total_including_vat>,
+      "vatTypeId": <vat_type_id_integer>,
+      "count": 1
+    }
   ]
 }
 
-VAT calculation (25% included in TTC/gross):
-  net_amount = total_ttc / 1.25
-  vat_amount = total_ttc - net_amount
+★ CRITICAL: orderLine fields are FLAT integers, NOT nested objects ★
+  - Use "accountId": 12345   NOT "account": {"id": 12345}
+  - Use "vatTypeId": 1       NOT "vatType": {"id": 1}
+  - Use "amountInclVat": 75500  NOT "unitPriceExcludingVat": 60400
+  - "externalId" is REQUIRED — use "line-1", "line-2" etc.
 
-Accounts for supplier invoices:
-  - 2400 = Leverandørgjeld (accounts payable — CREDIT side, negative amount)
-  - 2710 = Inngående merverdiavgift, høy sats (input VAT 25% — DEBIT side)
-  - The expense account is specified in the task (e.g., 7140, 6300, 4000)
+★ CRITICAL: Use query param sendTo=ledger to post directly to the ledger ★
+  params={"sendTo": "ledger"}
 
-IMPORTANT: Always link the supplier on the payable posting: "supplier": {"id": <supplier_id>}
-IMPORTANT: Sum of all posting amounts MUST equal 0 (debit = credit).
+VAT types for incoming/supplier invoices (INPUT VAT):
+  25% standard: vatTypeId=1  |  15% food: vatTypeId=11  |  12% transport: vatTypeId=12  |  0%: vatTypeId=0
+
+If POST /incomingInvoice fails with 403 or 422, fall back to voucher approach:
+  POST /ledger/voucher with postings:
+    Row 1: expense account (debit, net amount)
+    Row 2: account 2710 (input VAT 25%, debit, vat amount)
+    Row 3: account 2400 (accounts payable, credit = -total, with supplier:{id})
+  Look up account IDs by number: GET /ledger/account?number=2710&fields=id
+  Net = total / 1.25, VAT = total - net
 
 ---
 
@@ -344,6 +365,6 @@ Use extracted values directly in API calls — do not ask for clarification.
 - Invent field values not mentioned in the task
 - Use "invoiceEmail" when the task says "email"/"e-post"/"epost"/"correo"/"E-Mail" (use the "email" field instead)
 - Use row=0 in voucher postings (must be >= 1)
-- Use /incomingInvoice endpoint (it is unreliable — always use /ledger/voucher for supplier invoices)
+- Use nested objects in /incomingInvoice orderLines (use flat IDs: accountId, vatTypeId, NOT account:{id}, vatType:{id})
 - Assume resources exist on fresh accounts — always search first, create if not found
 """
