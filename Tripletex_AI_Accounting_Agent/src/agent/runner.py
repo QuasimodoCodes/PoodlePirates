@@ -233,13 +233,18 @@ def _classify_task(prompt: str) -> set:
     """Classify task to run only needed pre-flights, saving API call budget."""
     p = prompt.lower()
     cats = set()
-    if any(w in p for w in ['salary', 'lønn', 'lön', 'lönn', 'salaire', 'nomina', 'payroll', 'wage', 'gehalt', 'payslip']):
+    if any(w in p for w in ['salary', 'lønn', 'lön', 'lönn', 'salaire', 'nomina', 'payroll', 'wage', 'gehalt', 'payslip',
+                             'salario', 'salário']):  # PT salary
         cats.add('payroll')
-    if any(w in p for w in ['travel', 'reise', 'voyage', 'viaje', 'dienstreise', 'reisregning', 'reisrekn', 'diett', 'dietas', 'frais de d', 'nota de gastos', 'indemnit']):
+    if any(w in p for w in ['travel', 'reise', 'voyage', 'viaje', 'dienstreise', 'reisregning', 'reisrekn', 'diett', 'dietas', 'frais de d', 'nota de gastos', 'indemnit',
+                             'viagem', 'nota de despesa', 'despesa de viagem']):  # PT travel
         cats.add('travel')
-    if any(w in p for w in ['invoice', 'faktura', 'factura', 'rechnung', 'facture', 'payment', 'betaling', 'pago', 'zahlung', 'order', 'bestilling', 'commande', 'pedido', 'auftrag', 'credit', 'kreditnota', 'returned', 'tilbake', 'bounced', 'reverser', 'storniere', 'leverand', 'timesheet', 'timer for', 'hours for', 'horas para', 'stunden', 'heures pour', 'timar']):
+    if any(w in p for w in ['invoice', 'faktura', 'factura', 'rechnung', 'facture', 'payment', 'betaling', 'pago', 'zahlung', 'order', 'bestilling', 'commande', 'pedido', 'auftrag', 'credit', 'kreditnota', 'returned', 'tilbake', 'bounced', 'reverser', 'storniere', 'leverand', 'timesheet', 'timer for', 'hours for', 'horas para', 'stunden', 'heures pour', 'timar',
+                             'fatura', 'fornecedor']):  # PT invoice/supplier
         cats.add('invoice')
-    if any(w in p for w in ['employee', 'ansatt', 'mitarbeiter', 'employ', 'empleado', 'medarbeider', 'ny ansatt', 'nouvel employ', 'nuevo empleado', 'neuen mitarbeiter', 'ansette']):
+    if any(w in p for w in ['employee', 'ansatt', 'mitarbeiter', 'employ', 'empleado', 'medarbeider', 'ny ansatt', 'nouvel employ', 'nuevo empleado', 'neuen mitarbeiter', 'ansette',
+                             'funcionario', 'funcionária', 'novo funcionario', 'nova funcionaria',  # PT without accent (fallback)
+                             'funcionário', 'funcionária', 'novo funcionário', 'nova funcionária']):  # PT with accents
         cats.add('employee')
     if any(w in p for w in ['voucher', 'bilag', 'journal', 'konter', 'dimensi', 'dimension']):
         cats.add('ledger')
