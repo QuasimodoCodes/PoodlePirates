@@ -262,22 +262,35 @@ Search: GET /ledger/accountingDimensionName?count=20&fields=id,name
 
 ---
 
-## 17. INCOMING INVOICE (supplier invoice via new API)
-POST /incomingInvoice
+## 17. INCOMING / SUPPLIER INVOICE ★ ALWAYS CREATE SUPPLIER FIRST IF NEEDED ★
+Steps:
+1. Search supplier: GET /supplier?organizationNumber=X&count=5&fields=id
+   - If not found → POST /supplier {name, organizationNumber}
+2. Find expense account: GET /ledger/account?number=XXXX&fields=id,number,name
+3. Create the supplier invoice as a manual VOUCHER (the /incomingInvoice endpoint is unreliable):
+
+POST /ledger/voucher
 Body: {
-  "invoiceHeader": {
-    "invoiceDate": "YYYY-MM-DD",
-    "dueDate": "YYYY-MM-DD",
-    "vendorId": <supplier_id>,
-    "invoiceNumber": "INV-001",
-    "invoiceAmount": 12500.0,
-    "currencyId": 1,
-    "description": "Purchase of materials"
-  },
-  "orderLines": []
+  "date": "YYYY-MM-DD",
+  "description": "Supplier invoice <invoiceNumber> - <supplier_name>",
+  "postings": [
+    {"row": 1, "date": "YYYY-MM-DD", "account": {"id": <expense_acct_id>}, "amount": <net_amount>, "amountGross": <net_amount>, "amountGrossCurrency": <net_amount>, "currency": {"id": 1}},
+    {"row": 2, "date": "YYYY-MM-DD", "account": {"id": <vat_acct_id>}, "amount": <vat_amount>, "amountGross": <vat_amount>, "amountGrossCurrency": <vat_amount>, "currency": {"id": 1}},
+    {"row": 3, "date": "YYYY-MM-DD", "account": {"id": <payable_acct_id>}, "amount": -<total_ttc>, "amountGross": -<total_ttc>, "amountGrossCurrency": -<total_ttc>, "currency": {"id": 1}, "supplier": {"id": <supplier_id>}}
+  ]
 }
-NOTE: This is a nested structure with "invoiceHeader", NOT flat fields.
-If 403 (no permission), fall back to creating a voucher manually.
+
+VAT calculation (25% included in TTC/gross):
+  net_amount = total_ttc / 1.25
+  vat_amount = total_ttc - net_amount
+
+Accounts for supplier invoices:
+  - 2400 = Leverandørgjeld (accounts payable — CREDIT side, negative amount)
+  - 2710 = Inngående merverdiavgift, høy sats (input VAT 25% — DEBIT side)
+  - The expense account is specified in the task (e.g., 7140, 6300, 4000)
+
+IMPORTANT: Always link the supplier on the payable posting: "supplier": {"id": <supplier_id>}
+IMPORTANT: Sum of all posting amounts MUST equal 0 (debit = credit).
 
 ---
 
@@ -297,6 +310,7 @@ Use extracted values directly in API calls — do not ask for clarification.
 ## STRATEGY (follow this exactly)
 1. Read and understand the task — identify pattern (create / modify / delete / multi-step).
 2. Identify ALL resources needed and their creation order (prerequisites first).
+   ★ The account starts EMPTY — no customers, suppliers, employees exist. Create them before referencing. ★
 3. Execute each API call with all required fields — no trial-and-error.
 4. On error: read validationMessages, fix the specific field mentioned. Retry ONCE.
    Common fixes: add department.id (GET /department?count=1&fields=id), add dateOfBirth, switch vatType.
@@ -310,6 +324,8 @@ Use extracted values directly in API calls — do not ask for clarification.
 - "Register payment" → GET /invoice?...&fields=id,amount → PUT /invoice/{id}/:payment (query params!)
 - "Credit note" → GET /invoice → PUT /invoice/{id}/:createCreditNote (query params!)
 - "Create project for customer" → POST /customer → POST /employee (+ employment) → POST /project
+- "Supplier invoice / incoming invoice" → POST /supplier (if needed) → POST /ledger/voucher (see section 17)
+- "Register supplier invoice with VAT" → Create supplier → Create voucher with expense + VAT + payable postings
 
 ## NEVER
 - Use POST for invoice payment (it's PUT /invoice/{id}/:payment with query params)
@@ -328,4 +344,6 @@ Use extracted values directly in API calls — do not ask for clarification.
 - Invent field values not mentioned in the task
 - Use "invoiceEmail" when the task says "email"/"e-post"/"epost"/"correo"/"E-Mail" (use the "email" field instead)
 - Use row=0 in voucher postings (must be >= 1)
+- Use /incomingInvoice endpoint (it is unreliable — always use /ledger/voucher for supplier invoices)
+- Assume resources exist on fresh accounts — always search first, create if not found
 """
