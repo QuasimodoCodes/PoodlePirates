@@ -361,14 +361,22 @@ async def run_agent(
     # Salary type IDs — only for payroll, with explicit format so agent uses DB id not type#
     if need_payroll:
         try:
-            st_resp = client.get("/salary/type", params={"count": 100, "fields": "id,number,name"})
-            st_map = {st["number"]: {"id": st["id"], "name": st["name"]} for st in st_resp.get("values", [])}
-            key_types = {2000: "Fastlønn", 2001: "Timelønn", 2002: "Bonus", 6000: "Skattetrekk"}
-            found_st = {n: st_map[n] for n in key_types if n in st_map}
+            st_resp = client.get("/salary/type", params={"count": 100, "fields": "id,name"})
+            # Search by NAME not number — competition accounts use different type numbers
+            name_map = {st["name"]: st["id"] for st in st_resp.get("values", [])}
+            key_names = ["Fastlønn", "Timelønn", "Bonus", "Skattetrekk", "Timelønnet", "Sykepenger"]
+            found_st = {name: name_map[name] for name in key_names if name in name_map}
             if found_st:
-                st_parts = [f"{v['name']}(type#{n})->id:{v['id']}" for n, v in sorted(found_st.items())]
-                env_hints.append(f"[SALARY TYPE DB IDs — use id: value in salaryType:{{id:X}}, NOT the type# numbers: {' | '.join(st_parts)}]")
+                st_parts = [f"{name}->id:{sid}" for name, sid in found_st.items()]
+                env_hints.append(f"[SALARY TYPE DB IDs — use id: value in salaryType:{{id:X}}: {' | '.join(st_parts)}]")
                 log.info("salary_types_discovered", run_id=run_id, count=len(found_st))
+            else:
+                # Fallback: provide all types so agent can pick
+                all_types = [{"name": st["name"], "id": st["id"]} for st in st_resp.get("values", [])[:15]]
+                if all_types:
+                    st_parts = [f"{t['name']}->id:{t['id']}" for t in all_types]
+                    env_hints.append(f"[SALARY TYPE DB IDs — use id: value in salaryType:{{id:X}}: {' | '.join(st_parts)}]")
+                    log.info("salary_types_discovered", run_id=run_id, count=len(all_types))
         except Exception as e:
             log.warning("salary_type_discovery_failed", run_id=run_id, error=str(e))
 

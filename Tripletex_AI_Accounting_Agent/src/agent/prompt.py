@@ -430,16 +430,16 @@ Body: {
 }
 
 ★ CRITICAL SALARY TYPE IDs ★
-The [SALARY TYPE DB IDs] hint gives: e.g. Fastlønn(type#2000)->id:48793604
-- "id:48793604" is the DATABASE ID — use this in salaryType:{"id": 48793604}
-- "type#2000" is the TYPE NUMBER — DO NOT use 2000 as the id, it will give 422 error
-- Always use the id: value after the arrow (->) from the hint
-- DO NOT call GET /salary/type — use the [SALARY TYPE DB IDs] hint directly
+The [SALARY TYPE DB IDs] hint gives pre-discovered salary type IDs: e.g. Fastlønn->id:48793604
+- Use these IDs directly in salaryType:{"id": 48793604}
+- If NO [SALARY TYPE DB IDs] hint is provided, call GET /salary/type?count=50&fields=id,name to find them
+- Match by name: Grundgehalt/Grunnlønn → "Fastlønn"; Bonus/Einmalzahlung/bônus → "Bonus"; hourly → "Timelønn"
+- ★ Always try POST /salary/transaction FIRST — only fall back to voucher if it keeps failing ★
 
-Salary type language mapping (all → use Fastlønn type from hint unless bonus/commission):
-- Grundgehalt / Grunnlønn / Salario base / Salaire de base / Salário base → Fastlønn (type#2000)
-- Bonus / Einmalzahlung / Engangstillegg / Prima / Bonification → Bonus type (type#2002 or similar)
-- Timelønn / Stundenlohn / Hourly → Timelønn (type#2001)
+Salary type language mapping:
+- Grundgehalt / Grunnlønn / Salaire de base / Salario base / Salário base → use "Fastlønn" type
+- Bonus / Einmalzahlung / Engangstillegg / Prima / Bonification / bônus único → use "Bonus" type
+- Timelønn / Stundenlohn / Hourly → use "Timelønn" type
 
 ★ SALARY REQUIRES EMPLOYMENT WITH DIVISION ★
 Before creating salary transaction, check if employee has employment:
