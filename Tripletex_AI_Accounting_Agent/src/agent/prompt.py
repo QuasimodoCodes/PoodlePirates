@@ -403,22 +403,28 @@ Body: {
   "payslips": [{
     "employee": {"id": <emp_id>},
     "specifications": [
-      {"salaryType": {"id": <id_from_hint>}, "rate": 36800, "count": 1, "description": "Grunnlønn"},
-      {"salaryType": {"id": <id_from_hint>}, "rate": 5000, "count": 1, "description": "Bonus"}
+      {"salaryType": {"id": <DB_ID_FROM_HINT>}, "rate": 36800, "count": 1, "description": "Grunnlønn"},
+      {"salaryType": {"id": <DB_ID_FROM_HINT>}, "rate": 5000, "count": 1, "description": "Bonus"}
     ]
   }]
 }
-★ Use "salaryType": {"id": X} — the id value from [Salary type IDs: ...] hint, NOT the type number ★
-★ Fastlønn=type#2000, Timelønn=type#2001, Bonus=type#2002, Skattetrekk=type#6000 ★
+
+★ CRITICAL SALARY TYPE IDs ★
+The [SALARY TYPE DB IDs] hint gives: e.g. Fastlønn(type#2000)->id:48793604
+- "id:48793604" is the DATABASE ID — use this in salaryType:{"id": 48793604}
+- "type#2000" is the TYPE NUMBER — DO NOT use 2000 as the id, it will give 422 error
+- Always use the id: value after the arrow (->) from the hint
 
 ★ SALARY REQUIRES EMPLOYMENT WITH DIVISION ★
-If salary/transaction fails with "employee has no employment": create one FIRST:
-  POST /employee/employment body: {
+Before creating salary transaction, check if employee has employment:
+  GET /employee/employment?employeeId=<id>&fields=id,division
+  If empty → create: POST /employee/employment body: {
     "employee": {"id": X},
     "startDate": "YYYY-MM-DD",
     "isMainEmployer": true,
     "division": {"id": <from [Division id: X] hint>}  ← REQUIRED for salary
   }
+  If POST fails with dateOfBirth → PUT /employee/{id} to add dateOfBirth, then retry employment.
 If employment already exists but salary fails with "not linked to company":
   PUT /employee/employment/{id} body: {"id": X, "version": Y, "division": {"id": <from hint>}}
 

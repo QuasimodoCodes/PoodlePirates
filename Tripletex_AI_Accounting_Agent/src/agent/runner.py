@@ -227,7 +227,26 @@ def _execute_tool(name: str, args: dict, client: TripletexClient) -> dict:
         return {"error": detail}
 
 
-# ── Main agent loop ────────────────────────────────────────────────────────────
+# ── Task classifier — determines which pre-flights to run ──────────────────────
+
+def _classify_task(prompt: str) -> set:
+    """Classify task to run only needed pre-flights, saving API call budget."""
+    p = prompt.lower()
+    cats = set()
+    if any(w in p for w in ['salary', 'lønn', 'lön', 'lönn', 'salaire', 'nomina', 'payroll', 'wage', 'gehalt', 'payslip']):
+        cats.add('payroll')
+    if any(w in p for w in ['travel', 'reise', 'voyage', 'viaje', 'dienstreise', 'reisregning', 'reisrekn', 'diett', 'dietas', 'frais de d', 'nota de gastos', 'indemnit']):
+        cats.add('travel')
+    if any(w in p for w in ['invoice', 'faktura', 'factura', 'rechnung', 'facture', 'payment', 'betaling', 'pago', 'zahlung', 'order', 'bestilling', 'commande', 'pedido', 'auftrag', 'credit', 'kreditnota', 'returned', 'tilbake', 'bounced', 'reverser', 'storniere', 'leverand', 'timesheet', 'timer for', 'hours for', 'horas para', 'stunden', 'heures pour', 'timar']):
+        cats.add('invoice')
+    if any(w in p for w in ['employee', 'ansatt', 'mitarbeiter', 'employ', 'empleado', 'medarbeider', 'ny ansatt', 'nouvel employ', 'nuevo empleado', 'neuen mitarbeiter', 'ansette']):
+        cats.add('employee')
+    if any(w in p for w in ['voucher', 'bilag', 'journal', 'konter', 'dimensi', 'dimension']):
+        cats.add('ledger')
+    return cats
+
+
+# ── Main agent loop ──────────────────────────────────────────────────────────────────────────────
 
 async def run_agent(
     client: TripletexClient,
@@ -239,132 +258,114 @@ async def run_agent(
     start = time.time()
     today = time.strftime("%Y-%m-%d")
 
-    # ── Pre-flight setup: ensure bank account & discover payment type ──────
+    # Classify task — only run needed pre-flights to preserve API call budget
+    cats = _classify_task(prompt)
+    need_payroll = 'payroll' in cats
+    need_travel = 'travel' in cats
+    need_invoice = 'invoice' in cats
+    need_employee = 'employee' in cats
+    need_ledger = 'ledger' in cats
+    log.info("task_classified", run_id=run_id, categories=sorted(cats))
+
     env_hints = []
 
-    # Activate ELECTRONIC_VOUCHERS module (needed for /incomingInvoice)
-    try:
-        client.post("/company/salesmodules", body={
-            "name": "ELECTRONIC_VOUCHERS",
-            "costStartDate": today,
-        })
-        log.info("module_activated", run_id=run_id, module="ELECTRONIC_VOUCHERS")
-    except Exception as e:
-        err_str = str(e)[:120]
-        log.warning("module_activation_failed", run_id=run_id, module="ELECTRONIC_VOUCHERS", error=err_str)
-        # 409 = already active (fine), 403 = locked by competition (use voucher fallback)
-
-    # Ensure a division exists (required for /salary/transaction)
+    # Division — only for payroll/employee tasks
     division_id = None
-    try:
-        div_resp = client.get("/division", params={"count": 1, "fields": "id"})
-        div_values = div_resp.get("values", [])
-        if div_values:
-            division_id = div_values[0]["id"]
-        else:
-            # Create a default division so salary/transaction works
-            muni_resp = client.get("/municipality", params={"number": "0301", "count": 1, "fields": "id"})
-            muni_values = muni_resp.get("values", [])
-            muni_id = muni_values[0]["id"] if muni_values else 1
-            new_div = client.post("/division", body={
-                "name": "Hoveddivisjon",
-                "startDate": "2020-01-01",
-                "organizationNumber": "985365785",
-                "municipality": {"id": muni_id},
-                "municipalityDate": "2020-01-01",
-            })
-            division_id = new_div.get("value", {}).get("id")
-        if division_id:
-            env_hints.append(f"[Division id: {division_id} (use as division:{{\"id\":{division_id}}} when creating employment for salary tasks)]")
-            log.info("division_ready", run_id=run_id, division_id=division_id)
-    except Exception as e:
-        log.warning("division_setup_failed", run_id=run_id, error=str(e))
-
-    try:
-        # Ensure bank account 1920 has a bankAccountNumber (required for invoicing)
-        acct_resp = client.get("/ledger/account", params={
-            "number": 1920, "fields": "id,version,bankAccountNumber,isBankAccount", "count": 1
-        })
-        acct_values = acct_resp.get("values", [])
-        if acct_values:
-            acct = acct_values[0]
-            if not acct.get("bankAccountNumber"):
-                client.put(f"/ledger/account/{acct['id']}", body={
-                    "id": acct["id"],
-                    "version": acct["version"],
-                    "bankAccountNumber": "12345678903",
-                    "isBankAccount": True,
+    if need_payroll or need_employee:
+        try:
+            div_resp = client.get("/division", params={"count": 1, "fields": "id"})
+            div_values = div_resp.get("values", [])
+            if div_values:
+                division_id = div_values[0]["id"]
+            else:
+                muni_resp = client.get("/municipality", params={"number": "0301", "count": 1, "fields": "id"})
+                muni_id = (muni_resp.get("values", [{}])[0].get("id") or 1)
+                new_div = client.post("/division", body={
+                    "name": "Hoveddivisjon", "startDate": "2020-01-01",
+                    "organizationNumber": "985365785",
+                    "municipality": {"id": muni_id}, "municipalityDate": "2020-01-01",
                 })
-                log.info("bank_account_configured", run_id=run_id, account_id=acct["id"])
-    except Exception as e:
-        log.warning("bank_setup_failed", run_id=run_id, error=str(e))
+                division_id = new_div.get("value", {}).get("id")
+            if division_id:
+                env_hints.append(f"[Division id: {division_id} — use division:{{\"id\":{division_id}}} in POST /employee/employment]")
+                log.info("division_ready", run_id=run_id, division_id=division_id)
+        except Exception as e:
+            log.warning("division_setup_failed", run_id=run_id, error=str(e))
 
-    try:
-        # Discover a valid payment type ID
-        pt_resp = client.get("/invoice/paymentType", params={"count": 5, "fields": "id,description"})
-        pt_values = pt_resp.get("values", [])
-        if pt_values:
-            pt_id = pt_values[0]["id"]
-            env_hints.append(f"[Valid paymentTypeId: {pt_id} (use this for PUT /invoice/:payment)]")
-            log.info("payment_type_found", run_id=run_id, payment_type_id=pt_id)
-    except Exception as e:
-        log.warning("payment_type_lookup_failed", run_id=run_id, error=str(e))
+    # Department — only for employee/payroll tasks
+    if need_employee or need_payroll:
+        try:
+            dept_resp = client.get("/department", params={"count": 1, "fields": "id"})
+            dept_values = dept_resp.get("values", [])
+            if dept_values:
+                dept_id = dept_values[0]["id"]
+                env_hints.append(f"[Department id: {dept_id} — POST /employee REQUIRES department:{{\"id\":{dept_id}}} on first attempt]")
+                log.info("department_found", run_id=run_id, department_id=dept_id)
+        except Exception as e:
+            log.warning("department_discovery_failed", run_id=run_id, error=str(e))
 
-    try:
-        # Discover travel expense payment type (for /travelExpense/cost)
-        tpt_resp = client.get("/travelExpense/paymentType", params={"count": 5})
-        tpt_values = tpt_resp.get("values", [])
-        if tpt_values:
-            tpt_id = tpt_values[0]["id"]
-            env_hints.append(f"[Travel expense paymentType id: {tpt_id} (use as paymentType:{{\"id\":{tpt_id}}} in /travelExpense/cost)]")
-            log.info("travel_payment_type_found", run_id=run_id, travel_payment_type_id=tpt_id)
-    except Exception as e:
-        log.warning("travel_payment_type_lookup_failed", run_id=run_id, error=str(e))
+    # Bank account + payment type — only for invoice/order tasks
+    if need_invoice:
+        try:
+            acct_resp = client.get("/ledger/account", params={"number": 1920, "fields": "id,version,bankAccountNumber,isBankAccount", "count": 1})
+            acct_values = acct_resp.get("values", [])
+            if acct_values:
+                acct = acct_values[0]
+                if not acct.get("bankAccountNumber"):
+                    client.put(f"/ledger/account/{acct['id']}", body={"id": acct["id"], "version": acct["version"], "bankAccountNumber": "12345678903", "isBankAccount": True})
+                    log.info("bank_account_configured", run_id=run_id, account_id=acct["id"])
+        except Exception as e:
+            log.warning("bank_setup_failed", run_id=run_id, error=str(e))
 
-    # Pre-discover common account IDs (saves 3-5 GET calls per task)
-    try:
-        all_accts = client.get("/ledger/account", params={
-            "count": 1000, "fields": "id,number", "from": 0
-        })
-        acct_map = {}
-        for a in all_accts.get("values", []):
-            acct_map[a["number"]] = a["id"]
-        needed = [1920, 2400, 2600, 2710, 2770, 2780, 3000, 5000, 7000, 7100, 7140]
-        found = {n: acct_map[n] for n in needed if n in acct_map}
-        if found:
-            acct_hints = " | ".join(f"{n}={aid}" for n, aid in sorted(found.items()))
-            env_hints.append(f"[Account IDs: {acct_hints}]")
-            log.info("accounts_discovered", run_id=run_id, count=len(found))
-    except Exception as e:
-        log.warning("account_discovery_failed", run_id=run_id, error=str(e))
+        try:
+            pt_resp = client.get("/invoice/paymentType", params={"count": 5, "fields": "id,description"})
+            pt_values = pt_resp.get("values", [])
+            if pt_values:
+                pt_id = pt_values[0]["id"]
+                env_hints.append(f"[Valid paymentTypeId: {pt_id} (use this for PUT /invoice/:payment)]")
+                log.info("payment_type_found", run_id=run_id, payment_type_id=pt_id)
+        except Exception as e:
+            log.warning("payment_type_lookup_failed", run_id=run_id, error=str(e))
 
-    # Pre-discover salary type IDs (for payroll tasks)
-    try:
-        st_resp = client.get("/salary/type", params={"count": 100, "fields": "id,number,name"})
-        st_map = {}
-        for st in st_resp.get("values", []):
-            st_map[st["number"]] = {"id": st["id"], "name": st["name"]}
-        key_types = {2000: "Fastlønn", 2001: "Timelønn", 2002: "Bonus", 6000: "Skattetrekk"}
-        found_st = {n: st_map[n] for n in key_types if n in st_map}
-        if found_st:
-            st_hints = " | ".join(f"type#{n}_{v['name'].replace(' ','_')}=id:{v['id']}" for n, v in sorted(found_st.items()))
-            env_hints.append(f"[Salary type IDs (use id: field, NOT the type number): {st_hints}]")
-            log.info("salary_types_discovered", run_id=run_id, count=len(found_st))
-    except Exception as e:
-        log.warning("salary_type_discovery_failed", run_id=run_id, error=str(e))
+    # Travel payment type — only for travel tasks
+    if need_travel:
+        try:
+            tpt_resp = client.get("/travelExpense/paymentType", params={"count": 5})
+            tpt_values = tpt_resp.get("values", [])
+            if tpt_values:
+                tpt_id = tpt_values[0]["id"]
+                env_hints.append(f"[Travel expense paymentType id: {tpt_id} (use as paymentType:{{\"id\":{tpt_id}}} in /travelExpense/cost)]")
+                log.info("travel_payment_type_found", run_id=run_id, travel_payment_type_id=tpt_id)
+        except Exception as e:
+            log.warning("travel_payment_type_lookup_failed", run_id=run_id, error=str(e))
 
-    # Pre-discover department ID (required field when creating employees)
-    try:
-        dept_resp = client.get("/department", params={"count": 1, "fields": "id"})
-        dept_values = dept_resp.get("values", [])
-        if dept_values:
-            dept_id = dept_values[0]["id"]
-            env_hints.append(
-                f"[Department id: {dept_id} — POST /employee REQUIRES department:{{\"id\":{dept_id}}} on first attempt]"
-            )
-            log.info("department_found", run_id=run_id, department_id=dept_id)
-    except Exception as e:
-        log.warning("department_discovery_failed", run_id=run_id, error=str(e))
+    # Account IDs — only for ledger/invoice/salary tasks
+    if need_invoice or need_ledger or need_payroll:
+        try:
+            all_accts = client.get("/ledger/account", params={"count": 1000, "fields": "id,number", "from": 0})
+            acct_map = {a["number"]: a["id"] for a in all_accts.get("values", [])}
+            needed = [1920, 2400, 2600, 2710, 2770, 2780, 3000, 5000, 7000, 7100, 7140]
+            found = {n: acct_map[n] for n in needed if n in acct_map}
+            if found:
+                acct_hints = " | ".join(f"{n}={aid}" for n, aid in sorted(found.items()))
+                env_hints.append(f"[Account IDs: {acct_hints}]")
+                log.info("accounts_discovered", run_id=run_id, count=len(found))
+        except Exception as e:
+            log.warning("account_discovery_failed", run_id=run_id, error=str(e))
+
+    # Salary type IDs — only for payroll, with explicit format so agent uses DB id not type#
+    if need_payroll:
+        try:
+            st_resp = client.get("/salary/type", params={"count": 100, "fields": "id,number,name"})
+            st_map = {st["number"]: {"id": st["id"], "name": st["name"]} for st in st_resp.get("values", [])}
+            key_types = {2000: "Fastlønn", 2001: "Timelønn", 2002: "Bonus", 6000: "Skattetrekk"}
+            found_st = {n: st_map[n] for n in key_types if n in st_map}
+            if found_st:
+                st_parts = [f"{v['name']}(type#{n})->id:{v['id']}" for n, v in sorted(found_st.items())]
+                env_hints.append(f"[SALARY TYPE DB IDs — use id: value in salaryType:{{id:X}}, NOT the type# numbers: {' | '.join(st_parts)}]")
+                log.info("salary_types_discovered", run_id=run_id, count=len(found_st))
+        except Exception as e:
+            log.warning("salary_type_discovery_failed", run_id=run_id, error=str(e))
 
     # Build initial contents
     contents: list[types.Content] = []
