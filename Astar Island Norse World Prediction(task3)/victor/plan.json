@@ -61,7 +61,7 @@
     {
       "step_number": 3,
       "description": "API client setup — src/api/client.py: typed Session wrapper with Bearer auth, methods for all endpoints (get_rounds, get_round_detail, get_budget, simulate, submit). src/api/models.py: dataclasses for all request/response types.",
-      "status": "pending",
+      "status": "complete",
       "files": ["src/api/client.py", "src/api/models.py"],
       "note": "No raw requests calls anywhere else in codebase — all HTTP goes through client.py"
     },
