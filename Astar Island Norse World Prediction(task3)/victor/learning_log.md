@@ -128,6 +128,36 @@ N_HIST sweep at alpha=0.10: N_HIST=50 (24.32) > N_HIST=2000 (23.09)
 
 ---
 
+## Round 7 Results — 2026-03-20
+
+- [RESULT] Leaderboard score: **46.8 / 100** — rank #131 of 199. Better than R6 (12.9) but far below offline estimate (~71).
+- [WRONG] Offline LOO test predicted ~71 avg but live scored 46.8. Gap = overfitting to 6 historical rounds.
+- [WRONG] Floor=0.001 and Dirichlet argmax counting were tested AFTER R7 submission but would have been overfit changes too.
+- [LEARN] LOO with 6 rounds has high variance — hyperparameter tuning unreliable. Need to be more conservative.
+- [LEARN] Floor too low = catastrophic when wrong on unusual rounds. 0.005 is a safer compromise.
+- [FIX] Reverted Dirichlet (back to probability averaging). Set floor=0.005. Keep overlap + alpha=0.05 + N_HIST=50.
+
+---
+
+## Round 8 Results — 2026-03-20
+
+- [RESULT] Leaderboard score: **89.9 / 100** — rank #22 of 214. Best round by far (prev best: 71.7 R4).
+- [LEARN] Volatile targeting strategy worked: Phase 1 targets settlements/ports, Phase 2 spread for calibration.
+- [LEARN] Round 8 had strong calibration signals: settlements collapsed harder (60% Empty vs 44% hist), forests very stable (90% vs 75%).
+- [LEARN] Calibrator with N_HIST=50 adapted well to this round's unusual dynamics.
+- [LEARN] Conservative settings (alpha=0.05, floor=0.005) + smart targeting = best combo so far.
+- [FIX] No changes needed — keep everything as-is.
+
+| Round | alpha | floor | Strategy | Score | Rank |
+|-------|-------|-------|----------|-------|------|
+| 4     | 0.55  | 0.01  | fixed spread + overlap | 71.7  | #88  |
+| 5     | 0.55  | 0.01  | fixed spread + overlap | 43.9  | #103 |
+| 6     | 0.10  | 0.01  | fixed spread + overlap | 12.9  | #163 |
+| 7     | 0.05  | 0.005 | fixed spread + overlap | 46.8  | #131 |
+| 8     | 0.05  | 0.005 | volatile P1 + spread P2 | 89.9  | #22  |
+
+---
+
 ## Layer C Boost Weight History
 
 | Round | Rule | Boost used | Was it right? | Next value |

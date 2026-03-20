@@ -1,9 +1,9 @@
 """
 main.py — Full pipeline orchestrator for Astar Island Norse World Prediction.
 
-Two-phase overlap query strategy:
-  Phase 1 (25 queries): 5 fixed tiles per seed (corners + centre)
-  Phase 2 (25 queries): Repeat same tiles for noise reduction (2 obs per cell)
+Two-phase volatile+spread query strategy:
+  Phase 1 (25 queries): 5 volatile-targeted tiles per seed (settlements/ports)
+  Phase 2 (25 queries): 5 spread tiles per seed (corners + centre for calibration)
 
 Usage:
     python main.py                  # Full two-phase run
@@ -22,7 +22,7 @@ from src.model.initial_analyzer import analyze, build_seed_maps
 from src.model.terrain_estimator import estimate_all_seeds, load_transition_matrix
 from src.model.round_calibrator import calibrate, save_calibrated_matrix
 from src.observation.adaptive_planner import (
-    build_phase1_queries, build_phase2_overlap_queries, print_phase_summary
+    build_phase1_queries, build_phase2_spread_queries, print_phase_summary
 )
 from src.observation.runner import run as run_observations, load_all_observations
 from src.prediction.tensor_builder import build_and_save_all
@@ -140,8 +140,8 @@ def main():
     raw_initial = load_raw_initial()
     historical  = load_transition_matrix(calibrated=False)
 
-    # ── 4. Phase 1 — Fixed spatial scan (25 queries) ─────────────────
-    section("4. Phase 1 — Spatial Scan (25 queries)")
+    # ── 4. Phase 1 — Volatile targeting (25 queries) ─────────────────
+    section("4. Phase 1 — Volatile Targeting (25 queries)")
     phase1_queries = build_phase1_queries(seed_maps)
     print_phase_summary(1, phase1_queries)
 
@@ -150,9 +150,9 @@ def main():
     else:
         run_observations(client, ROUND_ID, phase1_queries)
 
-    # ── 5. Phase 2 — Overlap (repeat same tiles for noise reduction) ──
-    section("5. Phase 2 — Overlap Scan (25 queries)")
-    phase2_queries = build_phase2_overlap_queries(seed_maps)
+    # ── 5. Phase 2 — Spread coverage (25 queries) ──────────────────
+    section("5. Phase 2 — Spread Coverage (25 queries)")
+    phase2_queries = build_phase2_spread_queries(seed_maps)
     print_phase_summary(2, phase2_queries)
 
     if args.dry_run:

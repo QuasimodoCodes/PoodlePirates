@@ -94,6 +94,11 @@ def main():
     print(f"  {'Code':<6} {'Terrain':<14} {'n':>6}  {'Empty':>8} {'Settl':>8} {'Port':>8} {'Ruin':>8} {'Forest':>8} {'Mtn':>8}")
     print(f"  {'─'*80}")
 
+    # Average the full GT probability distributions (not argmax counts).
+    # This preserves soft distribution info — e.g., Forest->Settlement = 13.9%
+    # even though Forest argmax is almost always Forest.
+    # Dirichlet argmax counting was tested but overfits with only 6 rounds.
+
     transition_matrix = {}
 
     for code in sorted(accumulator.keys()):

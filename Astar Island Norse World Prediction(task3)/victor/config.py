@@ -76,7 +76,7 @@ SCORES_FILE          = f"{DATA_DIR}/scores.json"
 #     If ground truth is non-zero where you put 0.0 → KL divergence = infinity.
 #     Always apply PROB_FLOOR, then renormalize.
 #
-PROB_FLOOR_DYNAMIC   = 0.001  # floor for dynamic cells — sweep: 0.001 best (72.48 vs 70.87)
+PROB_FLOOR_DYNAMIC   = 0.005  # floor for dynamic cells — conservative to avoid overconfidence
 PROB_FLOOR_STATIC    = 1e-5  # floor for static cells (Mountain, Ocean) — excluded from scoring weight anyway
 UNIFORM_PRIOR        = [1.0 / NUM_TERRAIN_CLASSES] * NUM_TERRAIN_CLASSES  # baseline ~1-5/100 score
 SMOOTHING_EPSILON    = 1e-9  # secondary guard against log(0)
