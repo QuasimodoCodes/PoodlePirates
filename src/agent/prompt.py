@@ -131,20 +131,20 @@ Alternative: convert existing order to invoice:
 ---
 
 ## 6. INVOICE PAYMENT ★ CRITICAL — this is a PUT with query params, NOT a POST ★
-Find invoice: GET /invoice?invoiceNumber=X&count=5&fields=id,amount,amountCurrency
-  - MUST include invoiceDateFrom and invoiceDateTo params (e.g., "2025-01-01" to "2026-12-31")
+Find invoice: GET /invoice?invoiceDateFrom=2025-01-01&invoiceDateTo=2026-12-31&invoiceNumber=X&count=5&fields=id,amount,amountCurrency
+  ★ MUST include invoiceDateFrom AND invoiceDateTo — both are REQUIRED ★
 Register payment:
   PUT /invoice/{id}/:payment
-  Query params (NOT body): paymentDate=YYYY-MM-DD, paymentTypeId=0, paidAmount=<amount>
-  Use tripletex_put with path="/invoice/{id}/:payment", body={}, params={"paymentDate":"...", "paymentTypeId": 0, "paidAmount": <float>}
-  paymentTypeId=0 means auto-detect. paidAmountCurrency is optional (for foreign currency invoices).
+  Query params (NOT body): paymentDate=YYYY-MM-DD, paymentTypeId=<from env hint>, paidAmount=<amount>
+  Use tripletex_put with path="/invoice/{id}/:payment", body={}, params={"paymentDate":"...", "paymentTypeId": <id from [Valid paymentTypeId: X] hint>, "paidAmount": <float>}
+  ★ paymentTypeId: Use the value from the [Valid paymentTypeId: X] hint at the top of the task. Do NOT use 0. ★
 
 ★ BOUNCED/RETURNED PAYMENT (betaling avvist, retur, Rücklastschrift, pago devuelto, bounced) ★
   This is NOT a credit note! A bounced payment means the payment was registered but the bank returned it.
   Fix: Register a NEGATIVE payment to reverse:
     1. GET /invoice with customer filter + invoiceDateFrom/To → find the invoice
     2. PUT /invoice/{id}/:payment with paidAmount=NEGATIVE (e.g., -36875.0)
-       params={"paymentDate":"YYYY-MM-DD", "paymentTypeId": 0, "paidAmount": -36875.0}
+       params={"paymentDate":"YYYY-MM-DD", "paymentTypeId": <from env hint>, "paidAmount": -36875.0}
   This reverses the original payment. Do NOT use :createCreditNote for bounced payments.
 
 ---
@@ -268,6 +268,8 @@ CRITICAL posting rules:
 - "amountGrossCurrency" MUST equal "amountGross"
 - If account is VAT-locked (e.g., 3000=Sales 25%), add "vatType": {"id": 3} to that posting
 - Debit amounts are positive, credit amounts are negative. Sum of all amounts must be 0.
+- ★ Account 1500 (Kundefordringer/AR) REQUIRES "customer": {"id": X} on the posting ★
+- ★ Account 2400 (Leverandørgjeld/AP) REQUIRES "supplier": {"id": X} on the posting ★
 Find accounts: GET /ledger/account?number=3000&fields=id,number,name
 Common accounts: 1500=Kundefordringer, 1920=Bank, 3000=Salgsinntekt, 4000=Varekostnad, 6000-6999=Driftskostnader
 

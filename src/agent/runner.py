@@ -132,6 +132,38 @@ async def run_agent(
     start = time.time()
     today = time.strftime("%Y-%m-%d")
 
+    # ── Pre-flight setup: ensure bank account & discover payment type ──────
+    env_hints = []
+    try:
+        # Ensure bank account 1920 has a bankAccountNumber (required for invoicing)
+        acct_resp = client.get("/ledger/account", params={
+            "number": 1920, "fields": "id,version,bankAccountNumber,isBankAccount", "count": 1
+        })
+        acct_values = acct_resp.get("values", [])
+        if acct_values:
+            acct = acct_values[0]
+            if not acct.get("bankAccountNumber"):
+                client.put(f"/ledger/account/{acct['id']}", body={
+                    "id": acct["id"],
+                    "version": acct["version"],
+                    "bankAccountNumber": "12345678903",
+                    "isBankAccount": True,
+                })
+                log.info("bank_account_configured", run_id=run_id, account_id=acct["id"])
+    except Exception as e:
+        log.warning("bank_setup_failed", run_id=run_id, error=str(e))
+
+    try:
+        # Discover a valid payment type ID
+        pt_resp = client.get("/invoice/paymentType", params={"count": 5, "fields": "id,description"})
+        pt_values = pt_resp.get("values", [])
+        if pt_values:
+            pt_id = pt_values[0]["id"]
+            env_hints.append(f"[Valid paymentTypeId: {pt_id} (use this for PUT /invoice/:payment)]")
+            log.info("payment_type_found", run_id=run_id, payment_type_id=pt_id)
+    except Exception as e:
+        log.warning("payment_type_lookup_failed", run_id=run_id, error=str(e))
+
     # Build initial contents
     contents: list[types.Content] = []
 
@@ -183,8 +215,9 @@ async def run_agent(
         elif text_content:
             file_parts.append(types.Part.from_text(text=f"File '{fname}':\n{text_content}"))
 
-    # Prepend today's date so agent never has to guess
-    date_hint = types.Part.from_text(text=f"[Today's date: {today}]\n\n")
+    # Prepend today's date and environment hints so agent never has to guess
+    hints = [f"[Today's date: {today}]"] + env_hints
+    date_hint = types.Part.from_text(text="\n".join(hints) + "\n\n")
     user_parts = [date_hint] + file_parts + [types.Part.from_text(text=prompt)]
     contents.append(types.Content(role="user", parts=user_parts))
 
