@@ -66,7 +66,7 @@ async def _handle_solve(req: SolveRequest):
     run_id = str(uuid.uuid4())[:8]
     start = time.time()
     log.info("solve_start", run_id=run_id, task_num=task_num,
-             prompt_preview=req.prompt[:120])
+             prompt_preview=req.prompt[:300])
     try:
         client = TripletexClient(
             proxy_url=req.tripletex_credentials.base_url,

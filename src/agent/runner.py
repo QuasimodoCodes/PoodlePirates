@@ -241,6 +241,17 @@ async def run_agent(
 
     # ── Pre-flight setup: ensure bank account & discover payment type ──────
     env_hints = []
+
+    # Activate ELECTRONIC_VOUCHERS module (needed for /incomingInvoice)
+    try:
+        client.post("/company/salesmodules", body={
+            "name": "ELECTRONIC_VOUCHERS",
+            "costStartDate": today,
+        })
+        log.info("module_activated", run_id=run_id, module="ELECTRONIC_VOUCHERS")
+    except Exception:
+        pass  # 409 = already active, 403 = proxy blocks it — both fine
+
     try:
         # Ensure bank account 1920 has a bankAccountNumber (required for invoicing)
         acct_resp = client.get("/ledger/account", params={
