@@ -92,6 +92,20 @@ Steps:
 1. GET /employee?firstName=X&lastName=Y&count=5 to find, or POST /employee to create
 2. POST /travelExpense {employee:{id}, startDate, endDate, description}
 
+## TIMESHEET / HOURS REGISTRATION
+POST /timesheet/timeEntry
+Required fields: employee:{id}, date (YYYY-MM-DD), hours (float), activity:{id}, project:{id}
+
+Steps:
+1. Find employee: GET /employee?email=X&count=5 (search by email if given)
+   If not found: POST /employee {firstName, lastName, email}
+2. Find project: GET /project?name=X&count=5
+3. Find activity by name: GET /activity?name=X&count=5
+   If not found: POST /activity {name:"X", isProjectActivity:true, isGeneralActivity:false}
+4. POST /timesheet/timeEntry {employee:{id}, date:"YYYY-MM-DD", hours:35.0, activity:{id}, project:{id}}
+   - date: use today if not specified
+   - hours: total hours as a float
+
 ## LEDGER/VOUCHER
 POST /ledger/voucher for manual bookkeeping.
 GET /ledger/account?count=100 to search chart of accounts.
