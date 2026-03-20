@@ -1,0 +1,45 @@
+{
+  "project": "Astar Island - Viking Civilisation Prediction",
+  "objective": "Set up API integration and build foundation for observing Norse world simulator",
+  "totalBudget": "50 queries shared across 5 seeds",
+  "mapSize": "40x40",
+  "viewportSize": "15x15 (max)",
+  "steps": [
+    {
+      "step_number": 1,
+      "description": "Set up project structure and install dependencies (requests, numpy, pandas, python-dotenv)",
+      "status": "complete",
+      "expectedOutput": "Project folder with requirements.txt and .env.example file created"
+    },
+    {
+      "step_number": 2,
+      "description": "Create API client class with authentication setup (Google OAuth token handling)",
+      "status": "complete",
+      "expectedOutput": "api_client.py with authenticated client ready for requests"
+    },
+    {
+      "step_number": 3,
+      "description": "Create data structures and parsing functions for simulator responses",
+      "status": "complete",
+      "expectedOutput": "data_parser.py with functions to parse viewport and convert to numpy arrays"
+    },
+    {
+      "step_number": 4,
+      "description": "Implement query budget tracker and logging system",
+      "status": "complete",
+      "expectedOutput": "query_tracker.py that logs all queries, coordinates, and remaining budget"
+    },
+    {
+      "step_number": 5,
+      "description": "Test API connection with single exploratory query on one seed",
+      "status": "complete",
+      "expectedOutput": "Successfully query simulator and print viewport data to verify API works"
+    },
+    {
+      "step_number": 6,
+      "description": "Create observation strategy planner (gridding, sampling, query optimization)",
+      "status": "pending",
+      "expectedOutput": "strategy.py with functions to plan viewport coverage and manage query budget"
+    }
+  ]
+}
