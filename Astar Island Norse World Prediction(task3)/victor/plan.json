@@ -109,7 +109,7 @@
     {
       "step_number": 9,
       "description": "Terrain Estimator — src/model/terrain_estimator.py: build per-cell H×W×6 probability distributions using 3 stacked layers. KEY FIX: n=1 observation is NOT treated as an empirical distribution — it is a Bayesian update on the spatial prior.",
-      "status": "pending",
+      "status": "complete",
       "files": ["src/model/terrain_estimator.py"],
       "n1_problem": "Full scan gives each cell exactly 1 observation per seed. Seeds have different maps — cannot pool across seeds. Treating n=1 as 95% confidence is a delta function, not a distribution. Fix: Bayesian smoothing.",
       "layers": {
