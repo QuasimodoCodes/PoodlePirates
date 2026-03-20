@@ -338,6 +338,7 @@ async def run_agent(
     contents.append(types.Content(role="user", parts=user_parts))
 
     nudge_count = 0
+    has_made_successful_calls = False
     for iteration in range(MAX_ITERATIONS):
         if time.time() - start > TIMEOUT_SECONDS:
             log.warning("agent_timeout", run_id=run_id, iteration=iteration)
@@ -418,20 +419,14 @@ async def run_agent(
 
         log.info("gemini_response", run_id=run_id, function_calls=[fc.name for fc in function_calls])
 
-        # No function calls → done (but nudge up to 2 times if task isn't finished)
+        # No function calls → done (but nudge once if agent hasn't done any work yet)
         if not function_calls:
-            if nudge_count < 2 and prompt.strip().lower() != "test":
+            if not has_made_successful_calls and nudge_count < 1 and prompt.strip().lower() != "test":
                 nudge_count += 1
-                if nudge_count == 1:
-                    log.warning("no_tools_nudge", run_id=run_id, iteration=iteration, nudge=nudge_count)
-                    contents.append(types.Content(role="user", parts=[
-                        types.Part.from_text(text="You did not call any tools. Please use the tripletex_post/tripletex_get tools to complete the task. Do not just describe what to do — actually call the API.")
-                    ]))
-                else:
-                    log.warning("no_tools_nudge", run_id=run_id, iteration=iteration, nudge=nudge_count)
-                    contents.append(types.Content(role="user", parts=[
-                        types.Part.from_text(text="The task is NOT complete. You MUST call the API tools to finish it. If the last API call returned an error, read the error carefully and fix the request. Try a different approach if needed. DO NOT give up.")
-                    ]))
+                log.warning("no_tools_nudge", run_id=run_id, iteration=iteration, nudge=nudge_count)
+                contents.append(types.Content(role="user", parts=[
+                    types.Part.from_text(text="You did not call any tools. Please use the tripletex_post/tripletex_get tools to complete the task. Do not just describe what to do — actually call the API.")
+                ]))
                 continue
             log.info("agent_complete", run_id=run_id, iterations=iteration + 1)
             break
@@ -444,6 +439,10 @@ async def run_agent(
             result = _execute_tool(fc.name, args, client)
             log.info("tool_result", run_id=run_id, tool=fc.name,
                      result_preview=json.dumps(result, default=str)[:500])
+
+            # Track if any tool call succeeded (no error)
+            if "error" not in result:
+                has_made_successful_calls = True
 
             tool_response_parts.append(
                 types.Part.from_function_response(
