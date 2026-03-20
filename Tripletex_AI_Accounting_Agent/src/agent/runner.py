@@ -239,8 +239,10 @@ def _classify_task(prompt: str) -> set:
     if any(w in p for w in ['travel', 'reise', 'voyage', 'viaje', 'dienstreise', 'reisregning', 'reisrekn', 'diett', 'dietas', 'frais de d', 'nota de gastos', 'indemnit',
                              'viagem', 'nota de despesa', 'despesa de viagem']):  # PT travel
         cats.add('travel')
-    if any(w in p for w in ['invoice', 'faktura', 'factura', 'rechnung', 'facture', 'payment', 'betaling', 'pago', 'zahlung', 'order', 'bestilling', 'commande', 'pedido', 'auftrag', 'credit', 'kreditnota', 'returned', 'tilbake', 'bounced', 'reverser', 'storniere', 'leverand', 'timesheet', 'timer for', 'hours for', 'horas para', 'stunden', 'heures pour', 'timar',
-                             'fatura', 'fornecedor']):  # PT invoice/supplier
+    # 'rechnung' = German for invoice, BUT 'abrechnung' = expense report (reise/gehalt) — exclude those
+    _has_rechnung = 'rechnung' in p and 'abrechnung' not in p
+    if any(w in p for w in ['invoice', 'faktura', 'factura', 'facture', 'payment', 'betaling', 'pago', 'zahlung', 'order', 'bestilling', 'commande', 'pedido', 'auftrag', 'credit', 'kreditnota', 'returned', 'tilbake', 'bounced', 'reverser', 'storniere', 'leverand', 'timesheet', 'timer for', 'hours for', 'horas para', 'stunden', 'heures pour', 'timar',
+                             'fatura', 'fornecedor']) or _has_rechnung:  # PT invoice/supplier
         cats.add('invoice')
     if any(w in p for w in ['employee', 'ansatt', 'mitarbeiter', 'employ', 'empleado', 'medarbeider', 'ny ansatt', 'nouvel employ', 'nuevo empleado', 'neuen mitarbeiter', 'ansette',
                              'funcionario', 'funcionária', 'novo funcionario', 'nova funcionaria',  # PT without accent (fallback)
@@ -332,7 +334,7 @@ async def run_agent(
         except Exception as e:
             log.warning("payment_type_lookup_failed", run_id=run_id, error=str(e))
 
-    # Travel payment type — only for travel tasks
+    # Travel payment type + per diem zone — only for travel tasks
     if need_travel:
         try:
             tpt_resp = client.get("/travelExpense/paymentType", params={"count": 5})
@@ -343,6 +345,21 @@ async def run_agent(
                 log.info("travel_payment_type_found", run_id=run_id, travel_payment_type_id=tpt_id)
         except Exception as e:
             log.warning("travel_payment_type_lookup_failed", run_id=run_id, error=str(e))
+
+        try:
+            zone_resp = client.get("/travelExpense/perDiemCompensationZone", params={"count": 20, "fields": "id,name"})
+            zone_values = zone_resp.get("values", [])
+            if zone_values:
+                # Prefer domestic/innland zone; fall back to first
+                domestic = next((z for z in zone_values if any(w in z.get("name", "").lower() for w in ["innland", "inland", "domestic", "stat"])), None)
+                chosen_zone = domestic or zone_values[0]
+                zone_id = chosen_zone["id"]
+                zone_name = chosen_zone.get("name", "")
+                all_zones = " | ".join(f"{z['name']}->id:{z['id']}" for z in zone_values[:5])
+                env_hints.append(f"[Per diem zone (use for POST /travelExpense/perDiemCompensation): preferred={zone_name}->id:{zone_id} | all: {all_zones}]")
+                log.info("per_diem_zone_found", run_id=run_id, zone_id=zone_id, zone_name=zone_name)
+        except Exception as e:
+            log.warning("per_diem_zone_lookup_failed", run_id=run_id, error=str(e))
 
     # Account IDs — only for ledger/invoice/salary tasks
     if need_invoice or need_ledger or need_payroll:

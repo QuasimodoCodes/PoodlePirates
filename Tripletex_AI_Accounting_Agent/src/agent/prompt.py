@@ -264,19 +264,20 @@ Body for each cost line:
 Step 3: PER DIEM / DAILY ALLOWANCE ★ Use a SEPARATE endpoint — NOT travelExpense/cost ★
 If task mentions per diem, daily allowance, diett, Tagegeld, dietas, indemnité journalière, diária, kost:
   ★ Do NOT add per diem as a travelExpense/cost — it uses a completely different endpoint ★
-  1. Find zone: GET /travelExpense/perDiemCompensationZone?count=10&fields=id,name — pick first result
+  1. Use the [Per diem zone] hint for the zone id — do NOT call GET /travelExpense/perDiemCompensationZone
   2. POST /travelExpense/perDiemCompensation
      Body: {
        "travelExpense": {"id": <travel_expense_id>},
        "startDate": "<departureDate>",
        "endDate": "<returnDate>",
-       "zone": {"id": <zone_id>},
+       "zone": {"id": <zone_id from hint>},
        "isDeductionForBreakfast": false,
        "isDeductionForLunch": false,
        "isDeductionForDinner": false
      }
-     The system calculates the per diem amount automatically based on zone and dates.
-     ★ If a specific rate is given (e.g. 800 NOK/day), include "compensationTypeId" or use schema to find correct field ★
+     The system calculates the per diem amount based on zone and dates.
+  3. Date rules when no specific dates given: use today as departureDate; returnDate = today + (days - 1)
+     Example: 3 days → departureDate=today, returnDate=today+2 days
 
 ---
 
