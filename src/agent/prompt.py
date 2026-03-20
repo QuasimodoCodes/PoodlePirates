@@ -116,6 +116,10 @@ Find NOK: GET /currency?isoCode=NOK&count=5
 POST /department
 Fields: name (required), departmentNumber, departmentManager:{id}
 
+If task says "enable accounting" or "enable modules" for a department:
+PUT /company/settings/accounting with {"departmentAccounting": true, "version": <version>}
+(GET /company/settings/accounting first to get current version)
+
 ---
 
 ## 10. PROJECT
@@ -179,16 +183,25 @@ Use extracted values directly in API calls without re-asking.
 ---
 
 ## STRATEGY (follow this exactly)
-1. Read and fully understand the task.
-2. Identify resource type + all required fields + prerequisites.
-3. Execute API calls in logical order (create prerequisites first).
-4. One call per resource - get it right first time.
-5. On error: read the validationMessages, fix ONLY what it says. Retry ONCE.
+1. Read and fully understand the task — identify pattern (create / modify / delete / multi-step).
+2. Identify ALL resources needed and correct order (prerequisites first).
+3. Use ?fields=id,version,name on GET calls to minimize data transfer.
+4. Execute each API call ONCE with all required fields — no trial-and-error.
+5. On error: read validationMessages carefully, fix ONLY what it says. Retry ONCE.
+6. Do NOT do verification GETs after creating — you already have the id from the response.
+
+## TASK PATTERNS
+- "Create X" → POST /X with all fields
+- "Add/update field on X" → GET /X?name=Y&fields=id,version → PUT /X/{id} with {id, version, updated fields}
+- "Delete X" → GET /X?...&fields=id → DELETE /X/{id}
+- "Create invoice for customer" → GET or POST /customer → POST /order → POST /invoice
+- "Register payment" → GET /invoice?...&fields=id → POST /invoice/{id}/payment
 
 ## NEVER
 - Put sendToCustomer in invoice body (it is a query param).
-- Skip invoiceDueDate on invoices.
-- Skip employee employment after creating employee.
-- Use "address" field (use "postalAddress").
+- Skip invoiceDueDate on invoices (required field, default: invoiceDate + 30 days).
+- Skip POST /employee/employment after creating employee.
+- Use "address" field on customer (use "postalAddress").
+- Do extra GET calls to verify work you just created.
 - Invent field values not in the task.
 """
