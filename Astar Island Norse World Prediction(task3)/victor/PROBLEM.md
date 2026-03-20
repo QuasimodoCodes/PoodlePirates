@@ -117,6 +117,17 @@ prediction = prediction / prediction.sum(axis=-1, keepdims=True)
 Missing seed = **score 0** for that seed. Even a uniform prediction beats 0.
 Round score = average of all 5 seed scores.
 
+### Leaderboard Weighting — Later Rounds Count More
+> "Leaderboard = best round score across all rounds — later rounds may have higher weight."
+
+**Strategic implication:** Round 1 is for learning. Use it to:
+- Confirm API response format
+- Collect ground truth via `/analysis` post-round
+- Build the transition matrix
+- Tune α and Layer C boost weights
+
+Don't sacrifice learning for a marginally better Round 1 score.
+
 ### Prediction Format Constraints
 - `prediction[y][x]` = 6 floats summing to `1.0 ± 0.01`
 - All values must be non-negative
@@ -213,6 +224,9 @@ Authorization: Bearer <JWT from app.ainm.no browser cookies>
   "queries_used": 24, "queries_max": 50
 }
 ```
+⚠️ `width`/`height` = **full map dimensions** (always 40×40), NOT the viewport size.
+`grid` contains only the viewport cells — shape is `viewport_h × viewport_w`.
+Use `viewport.x` and `viewport.y` to place cells back on the full 40×40 grid.
 
 ### POST /submit Request
 ```json

@@ -21,6 +21,13 @@
     "push_to_remote": false,
     "merge_to_main": "ONLY when score is confirmed better than previous best — ask user before merging"
   },
+  "leaderboard_strategy": {
+    "rule": "Later rounds may be weighted more heavily on the leaderboard",
+    "implication": "Round 1 is for learning — get a submission in, collect /analysis ground truth, tune the model. Don't sacrifice learning for a marginally better Round 1 score.",
+    "round_1_goal": "Working submission + ground truth collection via /analysis",
+    "round_2_goal": "Apply transition matrix + tuned α → meaningful score improvement",
+    "merge_to_main_rule": "Only when score is verified better than previous best"
+  },
   "key_insights": {
     "static_cells": "Mountain (5) and Ocean (10) NEVER change — predict with ~0.99 confidence using initial_states (free)",
     "initial_states_free": "GET /rounds/{id} gives full initial grid + settlements for all 5 seeds at zero query cost",
@@ -89,6 +96,7 @@
       "status": "pending",
       "files": ["src/observation/runner.py"],
       "critical": "Save to disk IMMEDIATELY after each query. If crash at query 43, keep all 43. Sync with GET /budget before starting.",
+      "parsing_gotcha": "response.width/height = full map (40×40), NOT viewport size. response.grid shape = viewport_h × viewport_w. Use response.viewport.x and .y to place cells onto the full 40×40 tensor.",
       "rate_limit": "sleep(0.2) between calls = max 5/sec"
     },
     {
