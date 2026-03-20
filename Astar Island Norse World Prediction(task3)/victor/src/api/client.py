@@ -95,9 +95,9 @@ class AstarClient:
             RoundSummary(
                 id=r["id"],
                 status=r["status"],
-                map_width=r["map_width"],
-                map_height=r["map_height"],
-                seeds_count=r["seeds_count"],
+                map_width=r.get("map_width", config.MAP_WIDTH),
+                map_height=r.get("map_height", config.MAP_HEIGHT),
+                seeds_count=r.get("seeds_count", config.NUM_SEEDS),
             )
             for r in data
         ]

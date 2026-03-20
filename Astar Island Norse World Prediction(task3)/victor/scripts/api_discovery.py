@@ -54,6 +54,9 @@ def main() -> None:
 
     # ─── 1. List rounds ───────────────────────────────────────────
     section("1. GET /rounds — All rounds")
+    raw_rounds = client._get("/rounds")
+    print("  Raw response:")
+    print(json.dumps(raw_rounds, indent=2))
     rounds = client.get_rounds()
     for r in rounds:
         print(f"  id={r.id}  status={r.status}  map={r.map_width}×{r.map_height}  seeds={r.seeds_count}")

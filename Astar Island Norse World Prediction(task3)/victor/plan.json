@@ -76,7 +76,7 @@
     {
       "step_number": 5,
       "description": "Initial state analyzer — src/model/initial_analyzer.py: parse initial_states for all 5 seeds. Classify every cell as: STATIC_MOUNTAIN (code 5), STATIC_OCEAN (code 10), DYNAMIC_SETTLEMENT (code 1 or 2), DYNAMIC_LAND (code 0 or 11), STATIC_FOREST (code 4). Build per-seed 40×40 certainty map.",
-      "status": "pending",
+      "status": "complete",
       "files": ["src/model/initial_analyzer.py"],
       "why": "Mountain and Ocean = near-certain predictions at zero query cost. Identify EXACTLY which cells need observation budget.",
       "output": "Per-seed: list of static cells (high confidence), list of dynamic cells (need queries)"
