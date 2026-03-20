@@ -97,8 +97,12 @@ Optional: number, priceExcludingVatCurrency (float), priceIncludingVatCurrency (
   costExcludingVatCurrency (float), vatType:{id}, productUnit:{id},
   account:{id}, department:{id}, supplier:{id}, description
 
-For VAT on products: OMIT vatType unless the task specifically requires it.
-If you must set VAT, try id=3 first. If 422 "Ugyldig mva-kode", retry with vatType omitted.
+For VAT on products: use the hardcoded VAT IDs (see top of prompt).
+- Task says standard/25%: vatType:{id:3}
+- Task says food/15%/næringsmidler/Lebensmittel/alimentaire/alimentos: vatType:{id:31}
+- Task says transport/hotel/12%: vatType:{id:32}
+- Task says 0%/exempt/fritatt/befreit/exento: vatType:{id:5}
+- Task does NOT mention VAT: OMIT vatType entirely
 
 ---
 
@@ -456,7 +460,7 @@ If employment already exists but salary fails with "not linked to company":
   PUT /employee/employment/{id} body: {"id": X, "version": Y, "division": {"id": <from hint>}}
 
 If /salary/transaction still fails after fixing employment, fall back to a DETAILED voucher:
-★ Use pre-discovered Account IDs from [Account IDs: ...] hint — do NOT call GET for these ★
+★ Use pre-discovered Account IDs from [Account IDs: ...] hint — do NOT call GET /ledger/account individually ★
   Row 1: Account 5000 (Lønn til ansatte) DEBIT = gross salary + bonus
   Row 2: Account 2600 (Skattetrekk) CREDIT = -(gross * 0.30)  [~30% tax withholding estimate]
   Row 3: Account 2770 (Arbeidsgiveravgift) DEBIT = gross * 0.141 [14.1% employer social security]
@@ -470,7 +474,7 @@ Simplified minimum (if unsure about exact rates):
   Row 3: Account 1920 CREDIT = -(total gross * 0.70)  [net to bank]
   ★ The sum of all postings MUST be 0 ★
 
-Always look up account IDs: GET /ledger/account?number=5000&fields=id (same for 2600, 2770, 1920)
+Always look up account IDs from the [Account IDs: ...] hint — NEVER call GET /ledger/account?number=X individually (the hint already has them all)
 
 ---
 
@@ -539,5 +543,6 @@ Use extracted values directly in API calls — do not ask for clarification.
 - Create orders or invoices when the task says "set fixed price" — just PUT the project with isFixedPrice + fixedprice
 - Use "name" for dimension names (correct field is "dimensionName") or dimension values (correct is "displayName")
 - Use "accountingDimension":{"id":X} for dimension values (correct is "dimensionIndex": <integer>)
+- Add "specType", "type", "payslipType" or other invented fields to salary specification objects (valid fields: salaryType, rate, count, amount, description ONLY)
 - Keep retrying the SAME wrong field name on 422 — call tripletex_schema instead to discover correct fields
 """

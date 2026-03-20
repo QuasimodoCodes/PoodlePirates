@@ -227,29 +227,52 @@ def _execute_tool(name: str, args: dict, client: TripletexClient) -> dict:
         return {"error": detail}
 
 
+import re as _re
+
 # ── Task classifier — determines which pre-flights to run ──────────────────────
 
 def _classify_task(prompt: str) -> set:
     """Classify task to run only needed pre-flights, saving API call budget."""
     p = prompt.lower()
+    # Strip email addresses to prevent "faktura@company.no" triggering false positives
+    p_clean = _re.sub(r'\S+@\S+\.\S+', '', p)
+
     cats = set()
+
     if any(w in p for w in ['salary', 'lønn', 'lön', 'lönn', 'salaire', 'nomina', 'payroll', 'wage', 'gehalt', 'payslip',
-                             'salario', 'salário']):  # PT salary
+                             'salario', 'salário']):
         cats.add('payroll')
+
     if any(w in p for w in ['travel', 'reise', 'voyage', 'viaje', 'dienstreise', 'reisregning', 'reisrekn', 'diett', 'dietas', 'frais de d', 'nota de gastos', 'indemnit',
-                             'viagem', 'nota de despesa', 'despesa de viagem']):  # PT travel
+                             'viagem', 'nota de despesa', 'despesa de viagem']):
         cats.add('travel')
-    # 'rechnung' = German for invoice, BUT 'abrechnung' = expense report (reise/gehalt) — exclude those
-    _has_rechnung = 'rechnung' in p and 'abrechnung' not in p
-    if any(w in p for w in ['invoice', 'faktura', 'factura', 'facture', 'payment', 'betaling', 'pago', 'zahlung', 'order', 'bestilling', 'commande', 'pedido', 'auftrag', 'credit', 'kreditnota', 'returned', 'tilbake', 'bounced', 'reverser', 'storniere', 'leverand', 'timesheet', 'timer for', 'hours for', 'horas para', 'stunden', 'heures pour', 'timar',
-                             'fatura', 'fornecedor']) or _has_rechnung:  # PT invoice/supplier
+
+    # Pure supplier registration — classified separately to avoid invoice pre-flight waste
+    if any(w in p_clean for w in ['leverand', 'lieferant', 'fournisseur', 'fornecedor', 'supplier', 'proveedor']):
+        cats.add('supplier')
+
+    # Invoice/order/credit tasks (use clean prompt; exclude expense report "abrechnung")
+    _has_rechnung = 'rechnung' in p_clean and 'abrechnung' not in p
+    _invoice_words = ['invoice', 'faktura', 'factura', 'facture', 'order', 'bestilling', 'commande',
+                      'pedido', 'auftrag', 'credit', 'kreditnota', 'returned', 'tilbake', 'bounced',
+                      'reverser', 'storniere', 'timesheet', 'timer for', 'hours for', 'horas para',
+                      'stunden', 'heures pour', 'timar', 'fatura', 'inngående', 'incoming invoice']
+    if any(w in p_clean for w in _invoice_words) or _has_rechnung:
         cats.add('invoice')
+
+    # Payment registration — controls bank account + paymentType pre-flights
+    if any(w in p_clean for w in ['payment', 'betaling', 'pago', 'zahlung', 'paiement', 'pagamento',
+                                   'bounced', 'retur', 'avvist', 'returned', 'registrer betal']):
+        cats.add('payment')
+
     if any(w in p for w in ['employee', 'ansatt', 'mitarbeiter', 'employ', 'empleado', 'medarbeider', 'ny ansatt', 'nouvel employ', 'nuevo empleado', 'neuen mitarbeiter', 'ansette',
-                             'funcionario', 'funcionária', 'novo funcionario', 'nova funcionaria',  # PT without accent (fallback)
-                             'funcionário', 'funcionária', 'novo funcionário', 'nova funcionária']):  # PT with accents
+                             'funcionario', 'funcionária', 'novo funcionario', 'nova funcionaria',
+                             'funcionário', 'funcionária', 'novo funcionário', 'nova funcionária']):
         cats.add('employee')
+
     if any(w in p for w in ['voucher', 'bilag', 'journal', 'konter', 'dimensi', 'dimension']):
         cats.add('ledger')
+
     return cats
 
 
@@ -270,6 +293,7 @@ async def run_agent(
     need_payroll = 'payroll' in cats
     need_travel = 'travel' in cats
     need_invoice = 'invoice' in cats
+    need_payment = 'payment' in cats   # payment registration (subset of invoice)
     need_employee = 'employee' in cats
     need_ledger = 'ledger' in cats
     log.info("task_classified", run_id=run_id, categories=sorted(cats))
@@ -311,8 +335,9 @@ async def run_agent(
         except Exception as e:
             log.warning("department_discovery_failed", run_id=run_id, error=str(e))
 
-    # Bank account + payment type — only for invoice/order tasks
-    if need_invoice:
+    # Bank account + payment type — ONLY when payment registration is involved
+    # (not for simple invoice creation, credit notes, supplier registration, etc.)
+    if need_payment:
         try:
             acct_resp = client.get("/ledger/account", params={"number": 1920, "fields": "id,version,bankAccountNumber,isBankAccount", "count": 1})
             acct_values = acct_resp.get("values", [])
@@ -361,8 +386,8 @@ async def run_agent(
         except Exception as e:
             log.warning("per_diem_zone_lookup_failed", run_id=run_id, error=str(e))
 
-    # Account IDs — only for ledger/invoice/salary tasks
-    if need_invoice or need_ledger or need_payroll:
+    # Account IDs — only for payroll and ledger tasks (NOT for invoice/supplier/credit note)
+    if need_payroll or need_ledger:
         try:
             all_accts = client.get("/ledger/account", params={"count": 1000, "fields": "id,number", "from": 0})
             acct_map = {a["number"]: a["id"] for a in all_accts.get("values", [])}
