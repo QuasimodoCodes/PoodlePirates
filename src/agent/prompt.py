@@ -169,7 +169,21 @@ Find accounts: GET /ledger/account?count=100 (search by name or number)
 
 ---
 
-## 15. DELETE / REVERSE operations
+## 15. CUSTOM ACCOUNTING DIMENSIONS (flexfields / dimensions)
+If task asks to create a custom dimension (e.g. "Region", "Area") with values:
+Step 1: Enable dimensions if needed: GET /company/settings/accounting to check, PUT to enable flexFields
+Step 2: POST /ledger/account/customField or POST /flexField {name:"Region", values:[...]}
+Alternative paths to try if 404:
+- GET /ledger/dimension  (list existing)
+- POST /flexField/flexColumn  {name:"Region"}
+- POST /flexField/flexValue  {flexColumn:{id}, name:"Sør-Norge"}
+
+If dimension creation endpoint is unknown, try GET / to discover API root, or:
+GET /employee?fields=id&count=1 just to test connectivity, then try POST /flexField
+
+---
+
+## 16. DELETE / REVERSE operations
 For DELETE: first GET to find id, then DELETE /resource/{id}
 For corrections: GET resource, read error, then PUT with {id, version, corrected_fields}
 Supplier invoice reversal: POST /supplierInvoice/{id}/reverse
