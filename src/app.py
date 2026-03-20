@@ -13,6 +13,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from src.agent.runner import run_agent
+from src.config import settings
+from src.tripletex.client import TripletexClient
+
 from src.config import settings
 
 log = structlog.get_logger()
@@ -66,8 +70,6 @@ async def _handle_solve(req: SolveRequest):
     log.info("solve_start", run_id=run_id, task_num=task_num,
              prompt_preview=req.prompt[:120])
     try:
-        from src.tripletex.client import TripletexClient
-        from src.agent.runner import run_agent
         client = TripletexClient(
             proxy_url=req.tripletex_credentials.base_url,
             session_token=req.tripletex_credentials.session_token,

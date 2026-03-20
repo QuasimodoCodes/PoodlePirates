@@ -13,12 +13,15 @@ import base64
 import functools
 import io
 import json
+import re
 import time
 
+import pdfplumber
 import requests as http_requests
 import structlog
 from google import genai
 from google.genai import types
+from tenacity import RetryError
 
 from src.agent.prompt import SYSTEM_PROMPT
 from src.config import settings
@@ -208,7 +211,6 @@ def _execute_tool(name: str, args: dict, client: TripletexClient) -> dict:
             return {"error": f"Unknown tool: {name}"}
     except Exception as exc:
         # Unwrap tenacity RetryError to get the actual exception
-        from tenacity import RetryError
         actual = exc
         if isinstance(exc, RetryError) and exc.last_attempt.failed:
             actual = exc.last_attempt.exception()
@@ -296,7 +298,6 @@ async def run_agent(
 
             if mime == "application/pdf":
                 # Extract text from PDF pages
-                import pdfplumber
                 extracted = []
                 try:
                     with pdfplumber.open(io.BytesIO(raw_bytes)) as pdf:
@@ -370,7 +371,6 @@ async def run_agent(
                 if "429" in err or "quota" in err.lower() or "rate" in err.lower():
                     log.warning("gemini_rate_limit", run_id=run_id, model=model)
                     # Parse retry-after hint from error
-                    import re
                     match = re.search(r'retry in (\d+(?:\.\d+)?)s', err)
                     if match:
                         retry_after_secs = max(retry_after_secs, int(float(match.group(1))) + 5)
