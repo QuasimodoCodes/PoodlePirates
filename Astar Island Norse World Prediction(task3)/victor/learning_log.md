@@ -19,7 +19,14 @@ Each entry feeds directly into tuning α, Layer C boost weights, and eventually 
 
 ## Round History
 
-_(No rounds completed yet — entries will be added after each submission via scripts/post_round_analysis.py)_
+### Pre-Round 4 — Transition Matrix from Rounds 1–3 — 2026-03-20
+Source: 15 analysis files × 1600 cells = 24,000 cells of ground truth data
+
+- [LEARN] Settlements COLLAPSE: 47.6% of initial Settlements become Empty after 50 years. Only 28.3% survive. Our assumption that "settlements mostly stay settlements" was completely wrong.
+- [LEARN] Forests are very stable: 79.5% stay Forest. Only 11.8% get colonised into Settlements. Safe to predict high Forest confidence for isolated forest cells.
+- [LEARN] Plains mostly stay Empty (83.2%) but 11.6% become Settlement — expansion from nearby settlements is the dominant dynamic force on the map.
+- [LEARN] Ports collapse even more than Settlements: only 21% survive as Port. 47.2% become Empty, 21.1% become Forest.
+- [FIX] Layer C now uses real transition matrix instead of hand-coded spatial rules. transition_matrix.json saved to data/.
 
 ---
 
@@ -28,16 +35,17 @@ _(No rounds completed yet — entries will be added after each submission via sc
 Once we have 2+ rounds of data, fill this in from `GET /analysis` ground truths:
 
 ```
-initial_code → average final class distribution after 50 years
+initial_code → [Empty, Settlement, Port, Ruin, Forest, Mountain]  (n=samples)
 
-Code 0  (Empty)      → [?, ?, ?, ?, ?, ?]
-Code 1  (Settlement) → [?, ?, ?, ?, ?, ?]  ← most important to get right
-Code 2  (Port)       → [?, ?, ?, ?, ?, ?]
-Code 3  (Ruin)       → [?, ?, ?, ?, ?, ?]
-Code 4  (Forest)     → [?, ?, ?, ?, ?, ?]
-Code 5  (Mountain)   → [0, 0, 0, 0, 0, 1]  ← static, confirmed
-Code 10 (Ocean)      → [1, 0, 0, 0, 0, 0]  ← static, confirmed
-Code 11 (Plains)     → [?, ?, ?, ?, ?, ?]
+Code  1 (Settlement) → [0.476, 0.283, 0.004, 0.023, 0.214, 0.000]  n=637  ← mostly collapse!
+Code  2 (Port)       → [0.472, 0.085, 0.210, 0.021, 0.211, 0.000]  n=26
+Code  4 (Forest)     → [0.068, 0.118, 0.009, 0.010, 0.795, 0.000]  n=5029 ← very stable
+Code  5 (Mountain)   → [0.000, 0.000, 0.000, 0.000, 0.000, 1.000]  n=461  ← static ✅
+Code 10 (Ocean)      → [1.000, 0.000, 0.000, 0.000, 0.000, 0.000]  n=3180 ← static ✅
+Code 11 (Plains)     → [0.832, 0.116, 0.010, 0.011, 0.031, 0.000]  n=14667
+
+Note: Code 0 (Empty) and Code 3 (Ruin) not seen in initial states — treat as Plains prior.
+Saved in full at: data/transition_matrix.json
 ```
 
 When this table is filled, replace Layer C spatial rules with `transition_prior[initial_code]`.
