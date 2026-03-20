@@ -293,6 +293,38 @@ async def run_agent(
     except Exception as e:
         log.warning("travel_payment_type_lookup_failed", run_id=run_id, error=str(e))
 
+    # Pre-discover common account IDs (saves 3-5 GET calls per task)
+    try:
+        all_accts = client.get("/ledger/account", params={
+            "count": 1000, "fields": "id,number", "from": 0
+        })
+        acct_map = {}
+        for a in all_accts.get("values", []):
+            acct_map[a["number"]] = a["id"]
+        needed = [1920, 2400, 2600, 2710, 2770, 2780, 3000, 5000, 7000, 7100, 7140]
+        found = {n: acct_map[n] for n in needed if n in acct_map}
+        if found:
+            acct_hints = " | ".join(f"{n}={aid}" for n, aid in sorted(found.items()))
+            env_hints.append(f"[Account IDs: {acct_hints}]")
+            log.info("accounts_discovered", run_id=run_id, count=len(found))
+    except Exception as e:
+        log.warning("account_discovery_failed", run_id=run_id, error=str(e))
+
+    # Pre-discover salary type IDs (for payroll tasks)
+    try:
+        st_resp = client.get("/salary/type", params={"count": 100, "fields": "id,number,name"})
+        st_map = {}
+        for st in st_resp.get("values", []):
+            st_map[st["number"]] = {"id": st["id"], "name": st["name"]}
+        key_types = {2000: "Fastlønn", 2001: "Timelønn", 2002: "Bonus", 6000: "Skattetrekk"}
+        found_st = {n: st_map[n] for n in key_types if n in st_map}
+        if found_st:
+            st_hints = " | ".join(f"{n}({v['name']})={v['id']}" for n, v in sorted(found_st.items()))
+            env_hints.append(f"[Salary type IDs: {st_hints}]")
+            log.info("salary_types_discovered", run_id=run_id, count=len(found_st))
+    except Exception as e:
+        log.warning("salary_type_discovery_failed", run_id=run_id, error=str(e))
+
     # Build initial contents
     contents: list[types.Content] = []
 

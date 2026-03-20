@@ -29,6 +29,9 @@ Paths are relative: "/customer", "/employee", "/invoice" etc.
 - Prices: use floats (27300.0 not "27300").
 - PLAN before calling. Avoid unnecessary GETs. Fix errors in ONE retry.
 - Use ?fields=id,version,name on GET to minimize data transfer.
+- ★ EFFICIENCY: When you need MULTIPLE independent lookups (e.g., customer + employee, or multiple accounts), call them ALL in ONE response as parallel tool calls. Do NOT make sequential single calls. ★
+- ★ Use pre-discovered Account IDs from the [Account IDs: ...] hint — do NOT call GET /ledger/account for those. ★
+- ★ Use pre-discovered Salary type IDs from the [Salary type IDs: ...] hint — do NOT call GET /salary/type. ★
 
 ---
 
@@ -299,7 +302,7 @@ CRITICAL posting rules:
 - Debit amounts are positive, credit amounts are negative. Sum of all amounts must be 0.
 - ★ Account 1500 (Kundefordringer/AR) REQUIRES "customer": {"id": X} on the posting ★
 - ★ Account 2400 (Leverandørgjeld/AP) REQUIRES "supplier": {"id": X} on the posting ★
-Find accounts: GET /ledger/account?number=3000&fields=id,number,name
+Find accounts: use pre-discovered IDs from [Account IDs: ...] hint. Only call GET /ledger/account if the needed account is NOT in the hint.
 Common accounts: 1500=Kundefordringer, 1920=Bank, 3000=Salgsinntekt, 4000=Varekostnad, 6000-6999=Driftskostnader
 
 ---
@@ -368,6 +371,7 @@ VAT types for incoming/supplier invoices (INPUT VAT):
   25% standard: vatTypeId=1  |  15% food: vatTypeId=11  |  12% transport: vatTypeId=12  |  0%: vatTypeId=0
 
 If POST /incomingInvoice fails with 403 or 422, fall back to voucher approach:
+  ★ Use pre-discovered Account IDs from [Account IDs: ...] hint — do NOT call GET for these ★
   POST /ledger/voucher with postings:
     Row 1: expense account (debit, net amount)
     Row 2: account 2710 (input VAT 25%, debit, vat amount)
@@ -395,12 +399,16 @@ Body: {
   "payslips": [{
     "employee": {"id": <emp_id>},
     "specifications": [
-      {"specType": "SALARY", "rate": 36800, "count": 1, "description": "Grunnlønn"}
+      {"salaryType": {"id": <salary_type_id_for_fastlønn>}, "rate": 36800, "count": 1, "description": "Grunnlønn"},
+      {"salaryType": {"id": <salary_type_id_for_bonus>}, "rate": 5000, "count": 1, "description": "Bonus"}
     ]
   }]
 }
+★ Use "salaryType": {"id": X} — NOT "specType". Get IDs from the [Salary type IDs: ...] hint. ★
+★ salaryType number 2000 = Fastlønn, 2001 = Timelønn, 2002 = Bonus, 6000 = Skattetrekk ★
 
 If /salary/transaction fails (403 or 422), fall back to a DETAILED voucher with these postings:
+★ Use pre-discovered Account IDs from [Account IDs: ...] hint — do NOT call GET for these ★
   Row 1: Account 5000 (Lønn til ansatte) DEBIT = gross salary + bonus
   Row 2: Account 2600 (Skattetrekk) CREDIT = -(gross * 0.30)  [~30% tax withholding estimate]
   Row 3: Account 2770 (Arbeidsgiveravgift) DEBIT = gross * 0.141 [14.1% employer social security]
