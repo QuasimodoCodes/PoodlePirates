@@ -212,9 +212,11 @@ When the task says to set a fixed price on a project:
 1. Search for the project: GET /project?name=<name>&count=5&fields=id,version,name,isFixedPrice,fixedprice
    - If not found by name, try: GET /project?count=50&fields=id,version,name,customer(id)
 2. If the project doesn't exist, create it (POST /project)
-3. PUT /project/{id} with body: {"id": <id>, "version": <version>, "isFixedPrice": true, "fixedprice": <amount>}
-   ★ "fixedprice" is a FIELD ON THE PROJECT — it is NOT an invoice or order amount ★
-   ★ Do NOT create orders or invoices for this task — just update the project ★
+3. PUT /project/{id} with body: {"id": <id>, "version": <version>, "isFixedPrice": true, "fixedprice": <amount>,
+   "projectManager": {"id": <pm_id>}}
+   ★ ALWAYS include "projectManager" in PUT /project — omitting it may clear the project manager ★
+   ★ If the task mentions billing/invoicing the client, proceed to create an order+invoice after the PUT ★
+   ★ If the task ONLY says to set a fixed price with no billing, do NOT create orders or invoices ★
 
 To add an activity to a project:
 POST /project/projectActivity  body: {"project": {"id": <proj_id>}, "activity": {"id": <act_id>}}
@@ -238,7 +240,7 @@ Body: {
 }
 NOTE: Use "title" not "description". Use "travelDetails.departureDate/returnDate" not "startDate/endDate".
 
-Step 2: POST /travelExpense/cost (add each expense line) ★ REQUIRED for expense items ★
+Step 2: POST /travelExpense/cost (add each expense line) ★ REQUIRED for actual expense items ★
 Before adding costs, look up:
   a) Cost categories: GET /travelExpense/costCategory?showOnTravelExpenses=true&count=50&fields=id,description
      ★ Use fields=id,description — "name" is INVALID and causes 400 error ★
@@ -257,6 +259,23 @@ Body for each cost line:
 ★ "paymentType" is an OBJECT {"id": X}, NOT a string ★
 ★ "amountCurrencyIncVat" NOT "amount" or "amountNOKInclVAT" ★
 ★ "date" NOT "costDate" ★
+
+Step 3: PER DIEM / DAILY ALLOWANCE ★ Use a SEPARATE endpoint — NOT travelExpense/cost ★
+If task mentions per diem, daily allowance, diett, Tagegeld, dietas, indemnité journalière, diária, kost:
+  ★ Do NOT add per diem as a travelExpense/cost — it uses a completely different endpoint ★
+  1. Find zone: GET /travelExpense/perDiemCompensationZone?count=10&fields=id,name — pick first result
+  2. POST /travelExpense/perDiemCompensation
+     Body: {
+       "travelExpense": {"id": <travel_expense_id>},
+       "startDate": "<departureDate>",
+       "endDate": "<returnDate>",
+       "zone": {"id": <zone_id>},
+       "isDeductionForBreakfast": false,
+       "isDeductionForLunch": false,
+       "isDeductionForDinner": false
+     }
+     The system calculates the per diem amount automatically based on zone and dates.
+     ★ If a specific rate is given (e.g. 800 NOK/day), include "compensationTypeId" or use schema to find correct field ★
 
 ---
 
