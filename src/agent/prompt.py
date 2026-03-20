@@ -169,17 +169,15 @@ Find accounts: GET /ledger/account?count=100 (search by name or number)
 
 ---
 
-## 15. CUSTOM ACCOUNTING DIMENSIONS (flexfields / dimensions)
-If task asks to create a custom dimension (e.g. "Region", "Area") with values:
-Step 1: Enable dimensions if needed: GET /company/settings/accounting to check, PUT to enable flexFields
-Step 2: POST /ledger/account/customField or POST /flexField {name:"Region", values:[...]}
-Alternative paths to try if 404:
-- GET /ledger/dimension  (list existing)
-- POST /flexField/flexColumn  {name:"Region"}
-- POST /flexField/flexValue  {flexColumn:{id}, name:"Sør-Norge"}
+## 15. CUSTOM DIMENSIONS / FLEXFIELDS
+If the task asks to create a custom accounting dimension (e.g. "Region") with values:
+1. GET /ledger/dimension to list existing dimensions
+2. POST /ledger/dimension {name:"Region"}
+3. POST /ledger/dimensionValue {dimension:{id}, name:"Sør-Norge"}
+4. Repeat POST /ledger/dimensionValue for each value
 
-If dimension creation endpoint is unknown, try GET / to discover API root, or:
-GET /employee?fields=id&count=1 just to test connectivity, then try POST /flexField
+If /ledger/dimension gives 404, try: POST /flexField/flexColumn {name:"Region"}
+Then: POST /flexField/flexValue {flexColumn:{id}, name:"Sør-Norge"}
 
 ---
 

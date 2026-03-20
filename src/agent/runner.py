@@ -8,6 +8,9 @@ Flow:
   4. Feed tool results back to Gemini.
   5. Repeat until Gemini returns a plain text response (task done).
 """
+import asyncio
+import base64
+import io
 import json
 import time
 
@@ -49,6 +52,7 @@ TOOLS = [
                     properties={
                         "path": types.Schema(type=types.Type.STRING, description="API path e.g. '/employee'."),
                         "body": types.Schema(type=types.Type.OBJECT, description="JSON body of the resource to create."),
+                        "params": types.Schema(type=types.Type.OBJECT, description="Optional query parameters e.g. {\"sendToCustomer\": true}."),
                     },
                     required=["path", "body"],
                 ),
@@ -89,7 +93,7 @@ def _execute_tool(name: str, args: dict, client: TripletexClient) -> dict:
         if name == "tripletex_get":
             return client.get(args["path"], params=args.get("params"))
         elif name == "tripletex_post":
-            return client.post(args["path"], body=args["body"])
+            return client.post(args["path"], body=args["body"], params=args.get("params"))
         elif name == "tripletex_put":
             return client.put(args["path"], body=args["body"], params=args.get("params"))
         elif name == "tripletex_delete":
@@ -98,21 +102,21 @@ def _execute_tool(name: str, args: dict, client: TripletexClient) -> dict:
         else:
             return {"error": f"Unknown tool: {name}"}
     except Exception as exc:
-        # Extract the actual HTTP response body so Gemini can self-correct
-        detail = str(exc)
-        # httpx.HTTPStatusError has .response directly
-        if hasattr(exc, "response"):
+        # Unwrap tenacity RetryError to get the actual exception
+        from tenacity import RetryError
+        actual = exc
+        if isinstance(exc, RetryError) and exc.last_attempt.failed:
+            actual = exc.last_attempt.exception()
+
+        detail = str(actual)
+        if hasattr(actual, "response"):
             try:
-                detail = exc.response.json()
+                detail = actual.response.json()
             except Exception:
-                detail = exc.response.text
-        else:
-            cause = getattr(exc, "__cause__", None) or getattr(exc, "__context__", None)
-            if cause and hasattr(cause, "response"):
                 try:
-                    detail = cause.response.json()
+                    detail = actual.response.text
                 except Exception:
-                    detail = cause.response.text
+                    pass
         return {"error": detail}
 
 
@@ -131,19 +135,53 @@ async def run_agent(
     # Build initial contents
     contents: list[types.Content] = []
 
-    # Attach files if present
+    # Attach files if present — PDFs are extracted to text, images sent inline
     file_parts = []
     for f in files:
         mime = f.get("mime_type", "")
-        b64 = f.get("content_base64", "")
-        text = f.get("text", "")
-        name = f.get("name", "file")
-        if mime.startswith("image/") and b64:
-            import base64
-            file_parts.append(types.Part.from_bytes(data=base64.b64decode(b64), mime_type=mime))
-            file_parts.append(types.Part.from_text(text=f"(File: {name})"))
-        elif text:
-            file_parts.append(types.Part.from_text(text=f"File '{name}':\n{text}"))
+        b64_data = f.get("content_base64", "")
+        text_content = f.get("text", "")
+        fname = f.get("filename", f.get("name", "file"))
+
+        if b64_data:
+            raw_bytes = base64.b64decode(b64_data)
+
+            if mime == "application/pdf":
+                # Extract text from PDF pages
+                import pdfplumber
+                extracted = []
+                try:
+                    with pdfplumber.open(io.BytesIO(raw_bytes)) as pdf:
+                        for page in pdf.pages:
+                            page_text = page.extract_text()
+                            if page_text:
+                                extracted.append(page_text)
+                except Exception as e:
+                    log.warning("pdf_extraction_failed", file=fname, error=str(e))
+                pdf_text = "\n".join(extracted)
+                if pdf_text.strip():
+                    file_parts.append(types.Part.from_text(
+                        text=f"File '{fname}' (PDF content):\n{pdf_text}"))
+                else:
+                    # Scanned PDF with no text — send as image to Gemini
+                    file_parts.append(types.Part.from_bytes(data=raw_bytes, mime_type=mime))
+                    file_parts.append(types.Part.from_text(
+                        text=f"(File: {fname} — scanned PDF, extract data from the image)"))
+            elif mime.startswith("image/"):
+                file_parts.append(types.Part.from_bytes(data=raw_bytes, mime_type=mime))
+                file_parts.append(types.Part.from_text(text=f"(File: {fname})"))
+            else:
+                # Try decoding as text (CSV, JSON, etc.)
+                try:
+                    decoded_text = raw_bytes.decode("utf-8")
+                    file_parts.append(types.Part.from_text(
+                        text=f"File '{fname}':\n{decoded_text}"))
+                except UnicodeDecodeError:
+                    file_parts.append(types.Part.from_bytes(
+                        data=raw_bytes, mime_type=mime or "application/octet-stream"))
+                    file_parts.append(types.Part.from_text(text=f"(File: {fname})"))
+        elif text_content:
+            file_parts.append(types.Part.from_text(text=f"File '{fname}':\n{text_content}"))
 
     # Prepend today's date so agent never has to guess
     date_hint = types.Part.from_text(text=f"[Today's date: {today}]\n\n")
@@ -175,7 +213,7 @@ async def run_agent(
                 if "429" in err or "quota" in err.lower() or "rate" in err.lower():
                     wait = 10 * (attempt + 1)
                     log.warning("gemini_rate_limit", run_id=run_id, attempt=attempt, wait=wait)
-                    time.sleep(wait)
+                    await asyncio.sleep(wait)
                 else:
                     raise
 
