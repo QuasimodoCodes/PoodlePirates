@@ -31,7 +31,8 @@ Paths are relative: "/customer", "/employee", "/invoice" etc.
 - Use ?fields=id,version,name on GET to minimize data transfer.
 - ★ EFFICIENCY: When you need MULTIPLE independent lookups (e.g., customer + employee, or multiple accounts), call them ALL in ONE response as parallel tool calls. Do NOT make sequential single calls. ★
 - ★ Use pre-discovered Account IDs from the [Account IDs: ...] hint — do NOT call GET /ledger/account for those. ★
-- ★ Use pre-discovered Salary type IDs from the [Salary type IDs: ...] hint — do NOT call GET /salary/type. ★
+- ★ Use pre-discovered Salary type IDs from the [SALARY TYPE DB IDs] hint — do NOT call GET /salary/type. ★
+- ★ COPY ALL VALUES EXACTLY from the task: organization numbers, phone numbers, amounts, email addresses, names, dates. NEVER invent, round, abbreviate, or guess a value that is explicitly stated in the task. ★
 
 ---
 
@@ -433,6 +434,12 @@ The [SALARY TYPE DB IDs] hint gives: e.g. Fastlønn(type#2000)->id:48793604
 - "id:48793604" is the DATABASE ID — use this in salaryType:{"id": 48793604}
 - "type#2000" is the TYPE NUMBER — DO NOT use 2000 as the id, it will give 422 error
 - Always use the id: value after the arrow (->) from the hint
+- DO NOT call GET /salary/type — use the [SALARY TYPE DB IDs] hint directly
+
+Salary type language mapping (all → use Fastlønn type from hint unless bonus/commission):
+- Grundgehalt / Grunnlønn / Salario base / Salaire de base / Salário base → Fastlønn (type#2000)
+- Bonus / Einmalzahlung / Engangstillegg / Prima / Bonification → Bonus type (type#2002 or similar)
+- Timelønn / Stundenlohn / Hourly → Timelønn (type#2001)
 
 ★ SALARY REQUIRES EMPLOYMENT WITH DIVISION ★
 Before creating salary transaction, check if employee has employment:
