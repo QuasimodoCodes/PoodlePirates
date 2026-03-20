@@ -46,22 +46,21 @@ No VAT: id=0
 
 ---
 
-## 1. EMPLOYEE
-POST /employee
-Required: firstName, lastName, email (MUST be provided — validation requires it)
-Optional: phoneNumberMobile, dateOfBirth (YYYY-MM-DD), address:{addressLine1, postalCode, city, country:{id}}
+## 1. EMPLOYEE ★ TWO-STEP PROCESS — always POST employee THEN POST employment ★
+Step 1: POST /employee
+Body MUST include ALL of these:
+  {"firstName": "X", "lastName": "Y", "email": "x@y.no", "userType": "STANDARD", "dateOfBirth": "1990-01-15"}
+- email: use the EXACT email from the task
+- userType: "STANDARD" unless task says administrator/kontoadministrator/administrador/Kontoadministrator/administrateur/Administrador/account administrator → use "ADMINISTRATOR"
+- dateOfBirth: use value from task, or default "1990-01-15" if not specified
+- If POST fails with "department.id" error → GET /department?count=1&fields=id, retry with "department":{"id":<id>}
+- If POST fails with userType error (422) → retry with "userType": "STANDARD" instead
 
-ALWAYS include these fields:
-- "userType": "STANDARD" (REQUIRED — omitting it causes validation error)
-  If the task says "administrator" or "kontoadministrator", use "ADMINISTRATOR" instead.
-- "dateOfBirth": "1990-01-15" (use task value if given, else use this default — required for employment)
-- If POST fails with "department.id" validation error, GET /department?count=1&fields=id to find a department,
-  then retry with "department": {"id": <dept_id>} added.
-
-ALWAYS create employment AFTER creating employee:
-POST /employee/employment
+Step 2: POST /employee/employment  ★ ALWAYS DO THIS — NEVER SKIP ★
 Body: {"employee": {"id": <emp_id>}, "startDate": "YYYY-MM-DD", "isMainEmployer": true}
-Use startDate from task. If missing, use today's date.
+- startDate: use value from task, or today's date if not specified
+- If employment fails with "dateOfBirth" error → PUT /employee/{id} to add dateOfBirth, then retry
+- This step is MANDATORY. The employee is incomplete without it. Always do it immediately after Step 1.
 
 Search: GET /employee?count=100&fields=id,firstName,lastName,email
 

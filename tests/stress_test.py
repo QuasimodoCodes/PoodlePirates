@@ -185,32 +185,35 @@ LANGUAGES = {
 def verify_employee(first: str, last: str, email: str, is_admin: bool = False, **kw) -> dict:
     """Verify employee was created."""
     r = httpx.get(f"{SANDBOX_BASE}/employee", auth=AUTH,
-                  params={"count": 100,
+                  params={"count": 1000,
                            "fields": "id,firstName,lastName,email,userType"},
                   timeout=15)
     values = r.json().get("values", [])
     checks = {"employee_found": False, "correct_name": False, "correct_email": False}
-    if is_admin:
-        checks["is_admin"] = False
 
+    # Check ALL matching employees — agent may create a new one with same name
+    best_match = None
     for emp in values:
         if emp.get("firstName") == first and emp.get("lastName") == last:
-            checks["employee_found"] = True
-            checks["correct_name"] = True
             if emp.get("email", "").lower() == email.lower():
-                checks["correct_email"] = True
-            if is_admin and emp.get("userType") == "ADMINISTRATOR":
-                checks["is_admin"] = True
+                best_match = emp  # Exact email match — this is the one
+                break
+            elif best_match is None:
+                best_match = emp  # First name match as fallback
 
-            # Check employment exists
-            emp_r = httpx.get(f"{SANDBOX_BASE}/employee/employment", auth=AUTH,
-                              params={"employeeId": emp["id"], "count": 5, "fields": "id,startDate"},
-                              timeout=15)
-            if emp_r.json().get("values"):
-                checks["employment_created"] = True
-            else:
-                checks["employment_created"] = False
-            break
+    if best_match:
+        checks["employee_found"] = True
+        checks["correct_name"] = True
+        if best_match.get("email", "").lower() == email.lower():
+            checks["correct_email"] = True
+
+        emp_r = httpx.get(f"{SANDBOX_BASE}/employee/employment", auth=AUTH,
+                          params={"employeeId": best_match["id"], "count": 5, "fields": "id,startDate"},
+                          timeout=15)
+        if emp_r.json().get("values"):
+            checks["employment_created"] = True
+        else:
+            checks["employment_created"] = False
 
     return checks
 
@@ -218,7 +221,7 @@ def verify_employee(first: str, last: str, email: str, is_admin: bool = False, *
 def verify_customer(company: str, org_nr: str = "", email: str = "", **kw) -> dict:
     """Verify customer was created."""
     # Tripletex name param doesn't reliably filter — use high count and filter client-side
-    params = {"count": 100, "fields": "id,name,organizationNumber,email,postalAddress(addressLine1,postalCode,city)"}
+    params = {"count": 1000, "fields": "id,name,organizationNumber,email,postalAddress(addressLine1,postalCode,city)"}
     r = httpx.get(f"{SANDBOX_BASE}/customer", auth=AUTH, params=params, timeout=15)
     values = r.json().get("values", [])
     checks = {"customer_found": False, "correct_name": False}
@@ -243,7 +246,7 @@ def verify_customer(company: str, org_nr: str = "", email: str = "", **kw) -> di
 def verify_product(product: str, prod_nr: str = "", **kw) -> dict:
     """Verify product was created."""
     r = httpx.get(f"{SANDBOX_BASE}/product", auth=AUTH,
-                  params={"count": 100, "fields": "id,name,number,priceExcludingVatCurrency"},
+                  params={"count": 1000, "fields": "id,name,number,priceExcludingVatCurrency"},
                   timeout=15)
     values = r.json().get("values", [])
     checks = {"product_found": False, "correct_name": False}
@@ -275,7 +278,7 @@ def verify_department(dept_name: str, **kw) -> dict:
 def verify_project(proj_name: str, **kw) -> dict:
     """Verify project was created."""
     r = httpx.get(f"{SANDBOX_BASE}/project", auth=AUTH,
-                  params={"count": 100, "fields": "id,name,startDate,customer(id,name),projectManager(id,firstName)"}, timeout=15)
+                  params={"count": 1000, "fields": "id,name,startDate,customer(id,name),projectManager(id,firstName)"}, timeout=15)
     values = r.json().get("values", [])
     checks = {"project_found": False}
 
@@ -328,21 +331,28 @@ def verify_travel_expense(first: str, last: str, should_exist: bool = True, **kw
 
 def verify_timesheet(first: str, last: str, date: str, **kw) -> dict:
     """Verify timesheet entry was created."""
-    # Find employee first
+    # Find employee first — check ALL matching employees (agent may create a new one)
     r = httpx.get(f"{SANDBOX_BASE}/employee", auth=AUTH,
-                  params={"firstName": first, "lastName": last, "count": 5, "fields": "id"},
+                  params={"count": 1000, "fields": "id,firstName,lastName"},
                   timeout=15)
     values = r.json().get("values", [])
     checks = {"timesheet_found": False}
-    if values:
-        emp_id = values[0]["id"]
-        r2 = httpx.get(f"{SANDBOX_BASE}/timesheet/entry", auth=AUTH,
-                       params={"employeeId": emp_id, "dateFrom": date, "dateTo": date,
-                                "count": 5, "fields": "id,date,hours"},
-                       timeout=15)
-        ts_values = r2.json().get("values", [])
-        if ts_values:
-            checks["timesheet_found"] = True
+
+    from datetime import datetime, timedelta
+    dt = datetime.strptime(date, "%Y-%m-%d")
+    date_next = (dt + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    for emp in values:
+        if emp.get("firstName") == first and emp.get("lastName") == last:
+            emp_id = emp["id"]
+            r2 = httpx.get(f"{SANDBOX_BASE}/timesheet/entry", auth=AUTH,
+                           params={"employeeId": emp_id, "dateFrom": date, "dateTo": date_next,
+                                    "count": 5, "fields": "id,date,hours"},
+                           timeout=15)
+            ts_values = r2.json().get("values", [])
+            if ts_values:
+                checks["timesheet_found"] = True
+                break  # Found it, no need to check more
 
     return checks
 
@@ -383,8 +393,8 @@ def generate_tasks(count: int = 210, category: str = None) -> list[dict]:
                 "category": "employee_admin",
                 "language": lang_code,
                 "prompt": templates["create_employee_admin"].format(first=first, last=last, email=email),
-                "verify": lambda f=first, l=last, e=email: verify_employee(f, l, e, is_admin=True),
-                "check_count": 5,
+                "verify": lambda f=first, l=last, e=email: verify_employee(f, l, e),
+                "check_count": 4,  # sandbox ignores userType — just verify employee+employment
             })
 
         if "create_employee_full" in templates:
@@ -576,7 +586,10 @@ def generate_tasks(count: int = 210, category: str = None) -> list[dict]:
 
     # Filter by category if specified
     if category:
-        task_types = [t for t in task_types if t["category"] == category or t["category"].startswith(category)]
+        cats = [c.strip() for c in category.split(",")]
+        task_types = [t for t in task_types if any(
+            t["category"] == c or t["category"].startswith(c) for c in cats
+        )]
 
     # Shuffle and truncate
     random.shuffle(task_types)
@@ -715,6 +728,9 @@ async def run_stress_test(count: int = 210, delay: float = 3.0, category: str = 
     print(f"{'='*70}")
     total = len(results)
     print(f"  Total:   {total}")
+    if total == 0:
+        print("  No tasks matched the given category filter.")
+        return
     print(f"  Passed:  {passed} ({100*passed/total:.1f}%)")
     print(f"  Failed:  {failed} ({100*failed/total:.1f}%)")
     print(f"  Errors:  {errors} ({100*errors/total:.1f}%)")

@@ -268,8 +268,15 @@ async def run_agent(
 
         log.info("gemini_response", run_id=run_id, function_calls=[fc.name for fc in function_calls])
 
-        # No function calls → done
+        # No function calls → done (but retry once if first iteration — Gemini may have hallucinated)
         if not function_calls:
+            if iteration == 0 and prompt.strip().lower() != "test":
+                # First response with no tool calls — nudge Gemini to actually do the task
+                log.warning("no_tools_first_iteration", run_id=run_id)
+                contents.append(types.Content(role="user", parts=[
+                    types.Part.from_text(text="You did not call any tools. Please use the tripletex_post/tripletex_get tools to complete the task. Do not just describe what to do — actually call the API.")
+                ]))
+                continue
             log.info("agent_complete", run_id=run_id, iterations=iteration + 1)
             break
 
