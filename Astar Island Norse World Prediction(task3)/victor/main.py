@@ -1,9 +1,9 @@
 """
 main.py — Full pipeline orchestrator for Astar Island Norse World Prediction.
 
-Two-phase adaptive query strategy:
-  Phase 1 (25 queries): Fixed 5-tile spatial spread per seed → calibrate round dynamics
-  Phase 2 (25 queries): Entropy-guided targeting → focus budget on uncertain cells
+Two-phase overlap query strategy:
+  Phase 1 (25 queries): 5 fixed tiles per seed (corners + centre)
+  Phase 2 (25 queries): Repeat same tiles for noise reduction (2 obs per cell)
 
 Usage:
     python main.py                  # Full two-phase run
@@ -19,17 +19,14 @@ import argparse
 
 from src.api.client import AstarClient
 from src.model.initial_analyzer import analyze, build_seed_maps
-from src.model.terrain_estimator import estimate_all_seeds, load_transition_matrix, build_observation_index
+from src.model.terrain_estimator import estimate_all_seeds, load_transition_matrix
 from src.model.round_calibrator import calibrate, save_calibrated_matrix
 from src.observation.adaptive_planner import (
-    build_phase1_queries, build_phase2_queries, print_phase_summary
+    build_phase1_queries, build_phase2_overlap_queries, print_phase_summary
 )
 from src.observation.runner import run as run_observations, load_all_observations
 from src.prediction.tensor_builder import build_and_save_all
 import config
-
-ROUND_ID = "ae78003a-4efe-425a-881a-d16a39bca0ad"
-
 
 def load_token() -> str:
     token = os.getenv("ASTAR_API_TOKEN", "")
@@ -64,23 +61,36 @@ def main():
                         help="Load saved tensors and submit without re-running")
     args = parser.parse_args()
 
-    # ── 1. Auth ──────────────────────────────────────────────────────
-    section("1. Auth")
+    # ── 1. Auth + Round Detection ─────────────────────────────────────
+    section("1. Auth + Round Detection")
     token = load_token()
     client = AstarClient(token=token)
-    print(f"  Token loaded. Round: {ROUND_ID}")
+    ROUND_ID = client.get_active_round_id()
+    print(f"  Token loaded. Active round: {ROUND_ID}")
 
-    # ── 2. Initial states ────────────────────────────────────────────
+    # ── Clean stale files from previous rounds ─────────────────────
+    stale_files = [
+        os.path.join(config.DATA_DIR, "round_calibrated_matrix.json"),
+        os.path.join(config.DATA_DIR, "initial_states.json"),
+    ]
+    # Also clean old observations
+    obs_dir = os.path.join(config.DATA_DIR, "observations")
+    if os.path.exists(obs_dir):
+        for f in os.listdir(obs_dir):
+            stale_files.append(os.path.join(obs_dir, f))
+
+    cleaned = 0
+    for path in stale_files:
+        if os.path.exists(path):
+            os.remove(path)
+            cleaned += 1
+    if cleaned:
+        print(f"  Cleaned {cleaned} stale file(s) from previous round")
+
+    # ── 2. Initial states (always fetch fresh) ─────────────────────
     section("2. Initial States (free)")
-    initial_path = os.path.join(config.DATA_DIR, "initial_states.json")
-    if os.path.exists(initial_path):
-        with open(initial_path) as f:
-            raw = json.load(f)
-        seed_maps = build_seed_maps(raw)
-        print(f"  Loaded from disk: {len(seed_maps)} seeds")
-    else:
-        seed_maps = analyze(client, ROUND_ID, verbose=False)
-        print(f"  Fetched from API: {len(seed_maps)} seeds")
+    seed_maps = analyze(client, ROUND_ID, verbose=False)
+    print(f"  Fetched from API: {len(seed_maps)} seeds")
 
     for sm in seed_maps:
         print(f"  Seed {sm.seed_index}: {sm.n_static} static | "
@@ -99,7 +109,7 @@ def main():
                 data = json.load(f)
             tensors.append(data["tensor"])
             print(f"  Loaded seed {seed_idx} tensor from {path}")
-        submit_all(client, tensors, args.dry_run)
+        submit_all(client, ROUND_ID, tensors, args.dry_run)
         return
 
     # ── 3. Budget check ──────────────────────────────────────────────
@@ -120,7 +130,7 @@ def main():
         build_and_save_all(tensors)
         section("6. Submit")
         if not args.dry_run:
-            submit_all(client, tensors, dry_run=False)
+            submit_all(client, ROUND_ID, tensors, dry_run=False)
         return
 
     # ════════════════════════════════════════════════════════════════
@@ -140,23 +150,9 @@ def main():
     else:
         run_observations(client, ROUND_ID, phase1_queries)
 
-    # ── 5. Calibrate after Phase 1 ───────────────────────────────────
-    section("5. Phase 1 Calibration")
-    obs_p1 = load_all_observations()
-    print(f"  Phase 1 observations loaded: {len(obs_p1)} files")
-
-    blended_p1 = calibrate(raw_initial, obs_p1, historical, verbose=True)
-    save_calibrated_matrix(blended_p1)
-
-    # ── 6. Intermediate predictions (for entropy targeting) ──────────
-    section("6. Intermediate Predictions (Phase 1 only)")
-    intermediate = estimate_all_seeds(seed_maps, observations=obs_p1)
-    print(f"  Intermediate tensors built — using for entropy-guided Phase 2 targeting.")
-
-    # ── 7. Phase 2 — Entropy-guided queries (25 queries) ─────────────
-    section("7. Phase 2 — Entropy-Guided Scan (25 queries)")
-    obs_index_p1 = build_observation_index(obs_p1)
-    phase2_queries = build_phase2_queries(seed_maps, obs_index_p1, intermediate)
+    # ── 5. Phase 2 — Overlap (repeat same tiles for noise reduction) ──
+    section("5. Phase 2 — Overlap Scan (25 queries)")
+    phase2_queries = build_phase2_overlap_queries(seed_maps)
     print_phase_summary(2, phase2_queries)
 
     if args.dry_run:
@@ -164,32 +160,32 @@ def main():
     else:
         run_observations(client, ROUND_ID, phase2_queries)
 
-    # ── 8. Final calibration (all 50 observations) ───────────────────
-    section("8. Final Calibration (all 50 observations)")
+    # ── 6. Calibration (all 50 observations) ──────────────────────────
+    section("6. Calibration (all 50 observations)")
     obs_all = load_all_observations()
     print(f"  All observations loaded: {len(obs_all)} files")
 
     blended_final = calibrate(raw_initial, obs_all, historical, verbose=True)
     save_calibrated_matrix(blended_final)
 
-    # ── 9. Final predictions ─────────────────────────────────────────
-    section("9. Final Predictions")
+    # ── 7. Final predictions ─────────────────────────────────────────
+    section("7. Final Predictions")
     tensors = estimate_all_seeds(seed_maps, observations=obs_all)
 
-    # ── 10. Validate & save ──────────────────────────────────────────
-    section("10. Validate & Save Tensors")
+    # ── 8. Validate & save ──────────────────────────────────────────
+    section("8. Validate & Save Tensors")
     build_and_save_all(tensors)
 
-    # ── 11. Submit ───────────────────────────────────────────────────
-    section("11. Submit")
+    # ── 9. Submit ────────────────────────────────────────────────────
+    section("9. Submit")
     if args.dry_run:
         print("  [DRY RUN] — would submit 5 tensors. Skipping.")
         return
 
-    submit_all(client, tensors, dry_run=False)
+    submit_all(client, ROUND_ID, tensors, dry_run=False)
 
 
-def submit_all(client: AstarClient, tensors, dry_run: bool = False):
+def submit_all(client: AstarClient, round_id: str, tensors, dry_run: bool = False):
     import time
 
     scores_path = os.path.join(config.DATA_DIR, "scores.json")
@@ -200,14 +196,14 @@ def submit_all(client: AstarClient, tensors, dry_run: bool = False):
             print(f"  [DRY RUN] Would submit seed {seed_idx}")
             continue
 
-        resp = client.submit(ROUND_ID, seed_idx, tensor)
+        resp = client.submit(round_id, seed_idx, tensor)
         print(f"  Seed {seed_idx}: {'✅' if resp.success else '❌'}  {resp.message}")
         results.append({"seed_index": seed_idx, "success": resp.success})
         time.sleep(0.6)
 
     if results:
         with open(scores_path, "w") as f:
-            json.dump({"round_id": ROUND_ID, "submissions": results}, f, indent=2)
+            json.dump({"round_id": round_id, "submissions": results}, f, indent=2)
         print(f"\n  All 5 seeds submitted. Check leaderboard at app.ainm.no")
         print(f"  Results saved to {scores_path}")
 

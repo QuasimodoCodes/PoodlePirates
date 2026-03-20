@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "WebFetch(domain:app.ainm.no)"
+      "WebFetch(domain:app.ainm.no)",
+      "Bash(PYTHONIOENCODING=utf-8 python -m scripts.feature_sweep)"
     ]
   }
 }

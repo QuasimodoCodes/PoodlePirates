@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.api.client import AstarClient
 import config
 
-ROUND_ID_CURRENT = "8e839974-b13b-407b-a5e7-fc749d877195"
+# No hardcoded round IDs — fetches all completed rounds dynamically
 
 
 def main():

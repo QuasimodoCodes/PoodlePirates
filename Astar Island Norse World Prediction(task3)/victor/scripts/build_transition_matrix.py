@@ -77,7 +77,7 @@ def main():
                 cells_this_file += 1
 
         total_cells += cells_this_file
-        print(f"  → {cells_this_file} cells")
+        print(f"  -> {cells_this_file} cells")
 
     if skipped_no_gt == len(files):
         print("\nAll files missing ground_truth. The API may not include ground truth")
@@ -88,7 +88,7 @@ def main():
     # ── Build transition matrix ──────────────────────────────────────
     print(f"\nTotal cells processed: {total_cells}")
     print(f"\n{'═'*70}")
-    print("  TRANSITION MATRIX — initial terrain code → final class distribution")
+    print("  TRANSITION MATRIX — initial terrain code -> final class distribution")
     print(f"  (averaged over {len(files)} files, {total_cells} cells)")
     print(f"{'═'*70}")
     print(f"  {'Code':<6} {'Terrain':<14} {'n':>6}  {'Empty':>8} {'Settl':>8} {'Port':>8} {'Ruin':>8} {'Forest':>8} {'Mtn':>8}")
@@ -128,8 +128,8 @@ def main():
         second_class = sorted(range(6), key=lambda i: avg[i], reverse=True)[1]
         second_pct = avg[second_class] * 100
         print(f"    code {code:2d} ({name:<12}): "
-              f"mostly → {CLASS_NAMES[top_class]} ({top_pct:.1f}%)  "
-              f"then → {CLASS_NAMES[second_class]} ({second_pct:.1f}%)")
+              f"mostly -> {CLASS_NAMES[top_class]} ({top_pct:.1f}%)  "
+              f"then -> {CLASS_NAMES[second_class]} ({second_pct:.1f}%)")
 
     print("\n  Next: update terrain_estimator.py to use this matrix for Layer C.")
 

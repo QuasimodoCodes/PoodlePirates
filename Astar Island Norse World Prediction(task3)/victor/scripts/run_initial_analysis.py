@@ -15,8 +15,6 @@ from src.api.client import AstarClient
 from src.model.initial_analyzer import analyze
 import config
 
-ROUND_ID = "8e839974-b13b-407b-a5e7-fc749d877195"
-
 def main():
     token = os.getenv("ASTAR_API_TOKEN", "")
     if not token:
@@ -28,7 +26,9 @@ def main():
                         token = line.split("=", 1)[1].strip().strip('"').strip("'")
 
     client = AstarClient(token=token)
-    seed_maps = analyze(client, ROUND_ID, verbose=True)
+    round_id = client.get_active_round_id()
+    print(f"  Active round: {round_id}")
+    seed_maps = analyze(client, round_id, verbose=True)
 
     print(f"\n{'═'*60}")
     print("  SUMMARY")

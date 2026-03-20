@@ -82,7 +82,49 @@ When this table is filled, replace Layer C spatial rules with `transition_prior[
 |-------|--------|--------|--------|
 | 4     | 0.55   | 71.7   | — |
 | 5     | 0.55   | 43.9   | 0.30 ← too high, single obs misleading on high-variance rounds |
-| 6     | 0.30   | pending | — |
+| 6     | 0.10   | 12.9 (#163/186) | 0.50 — unusual round + low alpha = worst combo |
+
+---
+
+## Round 6 Results — 2026-03-20
+
+- [RESULT] Leaderboard score: **12.9 / 100** — rank #163 of 186. Worst round yet.
+- [WRONG] Round had extremely unusual dynamics (Forest stability -28%, Plains behaviour changed). Our alpha=0.10 barely used observations, so stale historical matrix dominated predictions.
+- [WRONG] N_HIST=2000 made calibration too conservative — even though we detected the unusual parameters, the blended matrix barely shifted.
+- [LEARN] This confirms: on unusual rounds, you NEED to trust observations (high alpha) and calibrate aggressively (low N_HIST). alpha=0.10 is catastrophic here.
+- [FIX] alpha raised to 0.50, N_HIST lowered to 50 for round 7.
+
+---
+
+## Alpha Sweep Results (Leave-One-Round-Out) — 2026-03-20
+
+Previous offline tests were BIASED: used full matrix including test round (data leakage).
+Honest leave-one-out test tells a different story:
+
+**5-round LOO (before round 6 data):**
+
+| alpha | No-Obs | 2Phase+Cal | Delta |
+|-------|--------|------------|-------|
+| 0.10  | 23.30  | 23.95      | +0.65 |
+| 0.50  | 23.30  | 24.59      | +1.30 |
+
+**6-round LOO (with round 6 data — more accurate):**
+
+| alpha | No-Obs | 2Phase+Cal | Delta |
+|-------|--------|------------|-------|
+| 0.00  | 22.60  | 22.62      | +0.01 |
+| 0.05  | 22.60  | 23.00      | +0.39 |
+| 0.10  | 22.60  | 23.09      | +0.49 |
+| 0.20  | 22.60  | 23.07      | +0.47 |
+| 0.50  | 22.60  | 22.32      | -0.29 |
+
+N_HIST sweep at alpha=0.10: N_HIST=50 (24.32) > N_HIST=2000 (23.09)
+
+- [LEARN] Optimal alpha depends on matrix quality. More rounds of data = better matrix = lower alpha.
+- [LEARN] With 6 rounds: alpha=0.10 best. With 5 rounds: alpha=0.50 best.
+- [LEARN] N_HIST=50 consistently best — aggressive calibration helps on unusual rounds (+4.19 on round 6).
+- [LEARN] Round 6 (ae78003a) was the biggest outlier: no-obs scored 6.54, but 2Phase+Cal at alpha=0.10 scored 10.73 (+4.19)
+- [FIX] Set alpha=0.10, N_HIST=50 for round 7
 
 ---
 

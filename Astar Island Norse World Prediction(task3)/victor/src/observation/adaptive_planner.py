@@ -1,13 +1,12 @@
 """
-adaptive_planner.py — Two-phase entropy-guided query planning.
+adaptive_planner.py — Two-phase query planning.
 
-Phase 1 (25 queries): 5 spatially-spread tiles × 5 seeds.
+Phase 1 (25 queries): 5 spatially-spread tiles x 5 seeds.
   Covers ~69% of the map. Enough to calibrate round dynamics.
 
-Phase 2 (25 queries): 5 entropy-guided tiles per seed.
-  After Phase 1 calibration + intermediate predictions, target the
-  tiles covering the highest-entropy *unobserved* cells per seed.
-  This concentrates the remaining budget where uncertainty is highest.
+Phase 2 (25 queries): Repeat Phase 1 tiles (overlap strategy).
+  Querying the same tiles twice gives 2 independent observations per cell,
+  reducing stochastic noise. Tested: overlap (73.29) > entropy-guided (72.48).
 """
 
 import math
@@ -152,6 +151,24 @@ def build_phase2_queries(
                     tile_id=f"s{sm.seed_index}_p2t{tile_idx}",
                 ))
 
+    return queries
+
+
+def build_phase2_overlap_queries(seed_maps) -> List[Query]:
+    """
+    25 queries: repeat Phase 1 tiles for a second observation.
+    Two observations per cell reduces stochastic noise.
+    """
+    queries = []
+    for tile_idx, (ax, ay) in enumerate(PHASE1_ANCHORS):
+        for sm in seed_maps:
+            queries.append(Query(
+                seed_index=sm.seed_index,
+                x=ax, y=ay,
+                w=TILE_W, h=TILE_H,
+                phase="phase2",
+                tile_id=f"s{sm.seed_index}_p2t{tile_idx}",
+            ))
     return queries
 
 
