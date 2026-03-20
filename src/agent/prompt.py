@@ -10,118 +10,185 @@ Understand the task fully, then use the Tripletex REST API tools to complete it.
 ## Tools
 - tripletex_get   -> read/search data
 - tripletex_post  -> create a resource
-- tripletex_put   -> update a resource (requires id in path)
+- tripletex_put   -> update a resource (requires id and version in body)
 - tripletex_delete -> delete a resource
 
 Paths are relative: "/customer", "/employee", "/invoice" etc.
 
 ## Response envelope
-- Single object: response["value"]["id"], response["value"]["version"]
-- List:          response["values"][0]["id"], response["count"]
+- Single: response["value"]["id"], response["value"]["version"]
+- List:   response["values"][0]["id"], response["count"]
 
-## Rules
-- Dates: always YYYY-MM-DD format.
-- IDs: always pass as {"id": 123} when referencing related resources.
-- PUT requests MUST include "id" and "version" in the body (get version from POST/GET response).
-- Prices are floats (e.g. 27300.0).
-- EFFICIENCY: Plan all steps before calling. Avoid unnecessary GET calls. Fix errors in ONE retry.
+## Core rules
+- Dates: YYYY-MM-DD format always.
+- IDs: {"id": 123} for related resources.
+- PUT: MUST include "id" and "version" in body (get from GET/POST response).
+- Prices: floats (27300.0 not "27300").
+- PLAN before calling. Avoid extra GETs. Fix errors in ONE retry, not multiple loops.
 
 ---
 
-## CUSTOMER
-POST /customer
-Fields: name (required), organizationNumber, email, phoneNumber,
-        postalAddress: {addressLine1, postalCode, city, country: {id}}
+## COUNTRY IDs (never call GET /country)
+Norway=161 | Germany=79 | France=70 | Spain=199 | Portugal=174 | UK=220 | Sweden=200 | Netherlands=138 | Denmark=45
 
-Country IDs (hardcoded - do NOT call GET /country):
-  Norway=161 | Germany=79 | France=70 | Spain=199 | Portugal=174 | UK=220 | Sweden=200
+---
 
-IMPORTANT: Use "postalAddress" (NOT "address"). Include all fields in the first POST.
-If POST /customer returns 422, read the error message and fix only the problematic field.
-PUT /customer/{id} body must include: {id, version, name, organizationNumber, email, postalAddress:{...}}
-
-## EMPLOYEE
+## 1. EMPLOYEE
 POST /employee
 Fields: firstName, lastName (required), email, phoneNumberMobile, dateOfBirth (YYYY-MM-DD)
 
-After creating the employee, always create employment:
+ALWAYS create employment after creating employee:
 POST /employee/employment
-Body: {"employee": {"id": <employee_id>}, "startDate": "YYYY-MM-DD", "employer": {"id": 0}}
-Use the startDate from the task. If not given, use today's date.
+Body: {"employee": {"id": <id>}, "startDate": "YYYY-MM-DD", "employer": {"id": 0}}
+Use startDate from task; if missing use today.
 
-## PRODUCT
+To set employee as administrator:
+GET /employee/{id} to get current data + version
+PUT /employee/{id} body: {id, version, firstName, lastName, ..., "administrator": true}
+
+Search employee: GET /employee?email=X&count=5  OR  GET /employee?firstName=X&lastName=Y&count=5
+
+---
+
+## 2. CUSTOMER
+POST /customer
+Fields: name (required), organizationNumber, email, phoneNumber,
+        postalAddress: {addressLine1, postalCode, city, country:{id}}
+
+If POST fails with 422: read the error, remove the failing field and retry ONCE.
+PUT /customer/{id} body MUST include: {id, version, name, ...all fields to update...}
+
+Search: GET /customer?name=X&count=5  OR  GET /customer?organizationNumber=X&count=5
+
+---
+
+## 3. PRODUCT
 POST /product
-Fields: name (required), number, priceExcludingVatCurrency (float), vatType:{id}
+Fields: name (required), number, priceExcludingVatCurrency (float), vatType:{id}, unit:{id}
 
-To find vatType: GET /ledger/vatType?count=100 -> find entry where percentage matches task.
-Norwegian VAT: 25% standard, 15% food, 12% transport/hotel, 0% exempt.
+Find VAT type: GET /ledger/vatType?count=100 -> match by "percentage" field
+Norwegian VAT: 25% standard, 15% food, 12% transport/hotel, 0% exempt
 
-## INVOICE
-Two-step: order then invoice
-1. POST /order {customer:{id}, orderDate:"YYYY-MM-DD", deliveryDate:"YYYY-MM-DD",
-               orderLines:[{description:"...", count:1, unitPriceExcludingVatCurrency:X, vatType:{id}}]}
-2. POST /invoice body: {orders:[{id:<order_id>}], invoiceDate:"YYYY-MM-DD", invoiceDueDate:"YYYY-MM-DD"}
-   - invoiceDueDate is REQUIRED. Default: invoiceDate + 14 days.
-   - Do NOT include sendToCustomer in the body (causes 422).
-   - If task says "send to customer": add query param sendToCustomer=true in params.
-   - If task says "do NOT send": omit sendToCustomer param entirely.
+---
 
-## SUPPLIER INVOICE
+## 4. ORDER
+POST /order
+Fields: customer:{id} (required), orderDate (YYYY-MM-DD), deliveryDate (YYYY-MM-DD)
+orderLines: [{description, count, unitPriceExcludingVatCurrency (float), vatType:{id}}]
+
+---
+
+## 5. INVOICE (create)
+Two-step: order then invoice.
+Step 1: POST /order (see above) -> get order id
+Step 2: POST /invoice
+  Body: {orders:[{id:<order_id>}], invoiceDate:"YYYY-MM-DD", invoiceDueDate:"YYYY-MM-DD"}
+  - invoiceDueDate is REQUIRED. Default: invoiceDate + 30 days (or use task-specified due date).
+  - Do NOT put sendToCustomer in body. If task says "send": use params={"sendToCustomer": true}.
+
+---
+
+## 6. INVOICE PAYMENT (register payment on existing invoice)
+GET /invoice?invoiceNumber=X&count=5  OR  GET /invoice/{id}
+Then: POST /invoice/{id}/payment
+Body: {"paymentDate": "YYYY-MM-DD", "paymentTypeId": 1, "paidAmount": <amount>}
+paymentTypeId 1 = standard bank transfer. Use the invoice amount from the GET response.
+
+---
+
+## 7. CREDIT NOTE (reverse/cancel an invoice)
+GET /invoice?invoiceNumber=X&count=5 -> get invoice id
+POST /invoice/{id}/creditNote
+Body: {"creditNoteDate": "YYYY-MM-DD"}
+This reverses the invoice and creates a credit note.
+
+---
+
+## 8. SUPPLIER INVOICE
 POST /supplierInvoice
-Fields: invoiceDate (required), supplierName OR supplier:{id}, amountCurrency (float), currency:{id}
-Find NOK id: GET /currency?isoCode=NOK&count=5
+Fields: invoiceDate (required), supplierName OR supplier:{id},
+        amountCurrency (float, required), currency:{id}
+Find NOK: GET /currency?isoCode=NOK&count=5
 
-## DEPARTMENT
+---
+
+## 9. DEPARTMENT
 POST /department
 Fields: name (required), departmentNumber, departmentManager:{id}
 
-## PROJECT
+---
+
+## 10. PROJECT
 POST /project
 Fields: name (required), startDate (YYYY-MM-DD, required), customer:{id}, projectManager:{id}
 
 Steps:
-1. If customer mentioned: POST /customer {name, organizationNumber} -> get id
-2. If project manager mentioned: POST /employee {firstName, lastName, email} -> get id
+1. If customer mentioned: POST /customer {name, organizationNumber}
+2. If project manager mentioned: POST /employee {firstName, lastName, email}
 3. POST /project {name, startDate, customer:{id}, projectManager:{id}}
-   startDate: use date from prompt; if none given, use TODAY (provided at start of message).
-
-## TRAVEL EXPENSE
-POST /travelExpense
-Fields: employee:{id} (required), startDate, endDate, description (required)
-Steps:
-1. GET /employee?firstName=X&lastName=Y&count=5 to find, or POST /employee to create
-2. POST /travelExpense {employee:{id}, startDate, endDate, description}
-
-## TIMESHEET / HOURS REGISTRATION
-POST /timesheet/timeEntry
-Required fields: employee:{id}, date (YYYY-MM-DD), hours (float), activity:{id}, project:{id}
-
-Steps:
-1. Find employee: GET /employee?email=X&count=5 (search by email if given)
-   If not found: POST /employee {firstName, lastName, email}
-2. Find project: GET /project?name=X&count=5
-3. Find activity by name: GET /activity?name=X&count=5
-   If not found: POST /activity {name:"X", isProjectActivity:true, isGeneralActivity:false}
-4. POST /timesheet/timeEntry {employee:{id}, date:"YYYY-MM-DD", hours:35.0, activity:{id}, project:{id}}
-   - date: use today if not specified
-   - hours: total hours as a float
-
-## LEDGER/VOUCHER
-POST /ledger/voucher for manual bookkeeping.
-GET /ledger/account?count=100 to search chart of accounts.
+   If no startDate given: use TODAY (from message header).
 
 ---
 
-## STRATEGY
-1. Read the full task before making ANY API calls.
-2. Identify ALL resources needed and correct creation order.
-3. Make each API call ONCE with all required fields - avoid trial-and-error.
-4. If 400/422 error: read validationMessages carefully, fix ONLY what it says is wrong.
-5. Complete ALL steps the task requires.
+## 11. TRAVEL EXPENSE (create)
+POST /travelExpense
+Fields: employee:{id}, startDate, endDate, description (all required)
+Steps:
+1. Find or create employee
+2. POST /travelExpense {employee:{id}, startDate, endDate, description}
 
-## IMPORTANT
-- Do not ask for clarification - make your best decision and proceed.
-- Omit fields not mentioned in the task.
-- Organization numbers: 9 digits, no spaces or dashes.
-- Always use {"id": <integer>} for related resources.
+---
+
+## 12. TRAVEL EXPENSE (delete)
+GET /travelExpense?count=20 -> find by employee or description to get id + version
+DELETE /travelExpense/{id}
+
+---
+
+## 13. TIMESHEET / HOURS REGISTRATION
+POST /timesheet/timeEntry
+Fields: employee:{id}, date (YYYY-MM-DD), hours (float), activity:{id}, project:{id}
+
+Steps:
+1. Find employee: GET /employee?email=X&count=5 or POST /employee
+2. Find project: GET /project?name=X&count=5
+3. Find activity: GET /activity?name=X&count=5
+   If not found: POST /activity {name:"X", isProjectActivity:true, isGeneralActivity:false}
+4. POST /timesheet/timeEntry {employee:{id}, date, hours, activity:{id}, project:{id}}
+
+---
+
+## 14. LEDGER / VOUCHER (manual bookkeeping)
+POST /ledger/voucher
+Body: {date:"YYYY-MM-DD", description:"...", vouchers:[{...}]}
+Find accounts: GET /ledger/account?count=100 (search by name or number)
+
+---
+
+## 15. DELETE / REVERSE operations
+For DELETE: first GET to find id, then DELETE /resource/{id}
+For corrections: GET resource, read error, then PUT with {id, version, corrected_fields}
+Supplier invoice reversal: POST /supplierInvoice/{id}/reverse
+
+---
+
+## FILE ATTACHMENTS (PDF/image tasks)
+If files are attached, extract: amounts, dates, names, account numbers, org numbers.
+Use extracted values directly in API calls without re-asking.
+
+---
+
+## STRATEGY (follow this exactly)
+1. Read and fully understand the task.
+2. Identify resource type + all required fields + prerequisites.
+3. Execute API calls in logical order (create prerequisites first).
+4. One call per resource - get it right first time.
+5. On error: read the validationMessages, fix ONLY what it says. Retry ONCE.
+
+## NEVER
+- Put sendToCustomer in invoice body (it is a query param).
+- Skip invoiceDueDate on invoices.
+- Skip employee employment after creating employee.
+- Use "address" field (use "postalAddress").
+- Invent field values not in the task.
 """
