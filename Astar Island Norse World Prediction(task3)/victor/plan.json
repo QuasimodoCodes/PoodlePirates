@@ -68,7 +68,7 @@
     {
       "step_number": 4,
       "description": "scripts/api_discovery.py — minimal probe script: authenticate, GET /rounds to find active round, GET /rounds/{id} to see initial_states structure, GET /budget to confirm remaining queries. Print all raw responses. Zero simulate calls — costs nothing.",
-      "status": "pending",
+      "status": "complete",
       "files": ["scripts/api_discovery.py"],
       "budget_impact": "0 queries — no simulate calls, just reading free endpoints",
       "verify": "Can see round_id, initial grid codes (10/11/0 for ocean/plains/empty, 5 for mountain), settlement list, queries_used"
