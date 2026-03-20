@@ -18,8 +18,11 @@ After each round, call `GET /analysis/{round_id}/{seed_index}` to get the real g
 
 ## Medium Priority
 
-### Terrain Transition Matrix
-Track how often each initial terrain code (0/1/2/3/4/5/10/11) becomes each final class (0-5). Build from observations. Use as prior for unobserved dynamic cells.
+### Terrain Transition Matrix (Round 2+ priority)
+After Round 1, call `GET /analysis` to get ground truth tensors. For every cell, record:
+`transition_prior[initial_code] → average final distribution`.
+Example: initial Settlement (code 1) → [0.05, 0.45, 0.25, 0.20, 0.03, 0.02].
+Replace Layer C spatial rules with this data-driven prior. Much more accurate than hand-coded boosts.
 
 ### Settlement Cluster & Faction Analysis
 Group initial settlements by `owner_id` faction from simulate responses. Friendly clusters may expand reliably; isolated ones are more raid-prone.

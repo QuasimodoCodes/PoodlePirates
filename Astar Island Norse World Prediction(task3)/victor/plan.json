@@ -100,11 +100,38 @@
     },
     {
       "step_number": 9,
-      "description": "Terrain Estimator — src/model/terrain_estimator.py: build per-cell H×W×6 probability distributions. (A) Static cells: Mountain=[0,0,0,0,0,0.99+], Ocean=[0.99+,0,0,0,0,0]. (B) Observed cells: empirical frequency across queries. (C) Unobserved dynamic cells: global observed frequency as prior. Apply 0.01 floor + renormalize everywhere.",
+      "description": "Terrain Estimator — src/model/terrain_estimator.py: build per-cell H×W×6 probability distributions using 3 stacked layers.",
       "status": "pending",
       "files": ["src/model/terrain_estimator.py"],
-      "scoring_note": "Dynamic cells: 0.01 floor (safety net). Static cells (Mountain/Ocean): 1e-5 floor (near-certain, excluded from scoring weight anyway). Always renormalize after floor.",
-      "simulate_returns_year_50": "Each simulate call runs the FULL 50-year sim — we observe year-50 state, NOT year-0. Empirical frequency across queries IS our Monte Carlo estimate. This is correct."
+      "layers": {
+        "LAYER_A_static": {
+          "what": "Cells classified STATIC from initial_states",
+          "Mountain_code5": "predict [1e-5, 1e-5, 1e-5, 1e-5, 1e-5, ~0.99995] — never changes",
+          "Ocean_code10": "predict [~0.99995, 1e-5, 1e-5, 1e-5, 1e-5, 1e-5] — never changes",
+          "floor": "1e-5 (excluded from scoring weight, but avoids log(0) edge cases)"
+        },
+        "LAYER_B_observed": {
+          "what": "Cells we directly observed via simulate() — empirical Monte Carlo",
+          "how": "Count class occurrences across all queries for this cell → divide by total → empirical frequency",
+          "note": "simulate() returns YEAR-50 state. Frequencies ARE the distribution we want.",
+          "floor": "0.01 floor on all 6 classes, then renormalize"
+        },
+        "LAYER_C_spatial_prior": {
+          "what": "Unobserved dynamic cells — use domain knowledge, NOT just global frequency",
+          "rules": [
+            "Adjacent to initial Settlement (code 1): raise P(class 1) +0.15, P(class 2) +0.10, P(class 3) +0.08 — expansion zone",
+            "Coastal cell (adj to Ocean) + near initial Settlement: raise P(class 2) Port +0.20 — ports need coast",
+            "Adjacent to Mountain (code 5): lower P(class 1) Settlement -0.10 — mountains block expansion",
+            "Distance > 5 cells from ANY initial settlement: raise P(class 0) +0.15, P(class 4) +0.10 — frontier land stays wild",
+            "Initial Forest (code 4) with no nearby settlement: raise P(class 4) +0.20 — forest is mostly static",
+            "Cell was initial Settlement/Port (code 1/2): already observed → goes to Layer B"
+          ],
+          "how": "Start from global observed terrain frequency as base prior. Apply additive boosts from rules above. Clip to [0,1]. Apply 0.01 floor. Renormalize.",
+          "why": "Pure global frequency ignores that settlements cluster, forests persist, and coasts attract ports. Spatial rules use the sim mechanics we already know for free."
+        }
+      },
+      "simulate_returns_year_50": "Each simulate() call runs the FULL 50-year sim — we observe year-50 state, NOT year-0. Empirical frequency across queries IS our Monte Carlo estimate.",
+      "order_of_priority": "Layer A overrides all. Layer B overrides Layer C. Layer C fills the gaps."
     },
     {
       "step_number": 10,
