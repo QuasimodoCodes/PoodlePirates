@@ -196,7 +196,8 @@ async def run_agent(
         log.info("agent_iteration", run_id=run_id, iteration=iteration)
 
         # Call Gemini with model fallback on rate limit (429)
-        MODELS = [settings.gemini_model, "gemini-2.5-flash-lite", "gemini-3-flash-preview"]
+        # gemini-3-flash-preview has better instruction following than flash-lite
+        MODELS = [settings.gemini_model, "gemini-3-flash-preview", "gemini-2.5-flash-lite"]
         response = None
         for model in MODELS:
             try:
@@ -220,23 +221,25 @@ async def run_agent(
                     raise
 
         if response is None:
-            # All models rate limited — wait and retry primary model
+            # All models rate limited — wait and retry with each model again
             log.warning("all_models_rate_limited", run_id=run_id, wait=15)
             await asyncio.sleep(15)
-            try:
-                response = ai.models.generate_content(
-                    model=MODELS[-1],
-                    contents=contents,
-                    config=types.GenerateContentConfig(
-                        system_instruction=SYSTEM_PROMPT,
-                        tools=TOOLS,
-                    ),
-                )
-            except Exception:
+            for model in MODELS:
+                try:
+                    response = ai.models.generate_content(
+                        model=model,
+                        contents=contents,
+                        config=types.GenerateContentConfig(
+                            system_instruction=SYSTEM_PROMPT,
+                            tools=TOOLS,
+                        ),
+                    )
+                    break
+                except Exception:
+                    continue
+            if response is None:
                 log.error("gemini_failed_all_models", run_id=run_id)
                 break
-            log.error("gemini_failed_all_retries", run_id=run_id)
-            break
 
         # Guard against empty/blocked responses
         if not response.candidates or response.candidates[0].content is None:

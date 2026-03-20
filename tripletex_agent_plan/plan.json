@@ -1,47 +1,52 @@
 [
   {
     "step_number": 1,
-    "description": "Project scaffolding: create folder structure, requirements.txt, .env.example, and .gitignore. Initialize Python virtual environment.",
+    "description": "Project scaffolding: create folder structure, requirements.txt, .env.example, and .gitignore.",
     "status": "complete"
   },
   {
     "step_number": 2,
-    "description": "REVISED - FastAPI server skeleton + dynamic Tripletex client: build POST /solve endpoint that accepts {prompt, proxy_url, session_token, files}. Rewrite TripletexClient to accept per-request credentials (proxy_url + session_token) instead of env vars. Add FastAPI + uvicorn to requirements. Verify server starts and /health returns 200.",
+    "description": "FastAPI server + dynamic Tripletex client: POST /solve + POST / endpoints, per-request credentials.",
     "status": "complete"
   },
   {
     "step_number": 3,
-    "description": "Claude tool-calling agent: implement an agentic loop where Claude receives the task prompt and a registry of Tripletex API tools. Claude calls tools in sequence until the task is complete. Tools wrap the dynamic TripletexClient. Support all 7 input languages via Claude's multilingual understanding.",
+    "description": "Gemini tool-calling agent: agentic loop with 4 tools (GET/POST/PUT/DELETE), model fallback chain.",
     "status": "complete"
   },
   {
     "step_number": 4,
-    "description": "Tripletex tools registry: implement tool definitions for the most common task categories: employees, customers, products, invoices, payments, credit notes, travel expenses, projects, departments, vouchers/ledger. Each tool wraps one or more Tripletex API calls.",
-    "status": "pending"
+    "description": "Comprehensive system prompt: 18 task type templates with exact API paths, field names, and patterns.",
+    "status": "complete"
   },
   {
     "step_number": 5,
-    "description": "File handling: if the /solve request includes PDF or image attachments (base64 or multipart), extract text/images and include them in Claude's context so it can read invoice data from documents.",
-    "status": "pending"
+    "description": "File handling: PDF text extraction via pdfplumber, image pass-through, CSV/text decoding.",
+    "status": "complete"
   },
   {
     "step_number": 6,
-    "description": "Error handling and agent guardrails: handle Tripletex API errors (4xx/5xx), rate limits (429), Claude tool errors. Add a hard timeout guard (4.5 min) so we always return before the platform's 5-min cutoff. Log each run to logs/ as JSON.",
-    "status": "pending"
+    "description": "Error handling: tenacity retry (429/5xx only), RetryError unwrapping, empty response guard, async sleep.",
+    "status": "complete"
   },
   {
     "step_number": 7,
-    "description": "Efficiency optimization: minimize API round-trips by fetching lookups (VAT types, account codes, currencies) once and caching within a request. Use Claude to batch operations where possible.",
-    "status": "pending"
+    "description": "API accuracy audit: Verified all endpoints against OpenAPI spec and sandbox. Fixed invoice payment (PUT /:payment), credit note (PUT /:createCreditNote), timesheet (/timesheet/entry), travel expense (travelDetails), VAT types (output=3, input=1), currency IDs (NOK=1).",
+    "status": "complete"
   },
   {
     "step_number": 8,
-    "description": "Deployment: expose the FastAPI server publicly over HTTPS. Options: Railway, Render, or ngrok for local testing. Document deployment steps in README. Verify the platform can reach /solve.",
-    "status": "pending"
+    "description": "Deployment via ngrok: persistent HTTPS URL, server on port 8000 with uvicorn --reload.",
+    "status": "complete"
   },
   {
     "step_number": 9,
-    "description": "End-to-end test: simulate a /solve request locally with a known task prompt (e.g. 'Create an employee named X'), verify the correct Tripletex API call is made and returns 200. Cover at least 3 task categories.",
+    "description": "Sandbox testing: verify all task types work against sandbox API. Employee+employment, customer, product, project, department, travel expense confirmed working.",
+    "status": "in_progress"
+  },
+  {
+    "step_number": 10,
+    "description": "Competition submission: submit to platform, target all 30 task types passing, optimize for efficiency bonus.",
     "status": "pending"
   }
 ]
