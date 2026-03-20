@@ -249,8 +249,10 @@ async def run_agent(
             "costStartDate": today,
         })
         log.info("module_activated", run_id=run_id, module="ELECTRONIC_VOUCHERS")
-    except Exception:
-        pass  # 409 = already active, 403 = proxy blocks it — both fine
+    except Exception as e:
+        err_str = str(e)[:120]
+        log.warning("module_activation_failed", run_id=run_id, module="ELECTRONIC_VOUCHERS", error=err_str)
+        # 409 = already active (fine), 403 = locked by competition (use voucher fallback)
 
     # Ensure a division exists (required for /salary/transaction)
     division_id = None
@@ -350,6 +352,19 @@ async def run_agent(
             log.info("salary_types_discovered", run_id=run_id, count=len(found_st))
     except Exception as e:
         log.warning("salary_type_discovery_failed", run_id=run_id, error=str(e))
+
+    # Pre-discover department ID (required field when creating employees)
+    try:
+        dept_resp = client.get("/department", params={"count": 1, "fields": "id"})
+        dept_values = dept_resp.get("values", [])
+        if dept_values:
+            dept_id = dept_values[0]["id"]
+            env_hints.append(
+                f"[Department id: {dept_id} — POST /employee REQUIRES department:{{\"id\":{dept_id}}} on first attempt]"
+            )
+            log.info("department_found", run_id=run_id, department_id=dept_id)
+    except Exception as e:
+        log.warning("department_discovery_failed", run_id=run_id, error=str(e))
 
     # Build initial contents
     contents: list[types.Content] = []

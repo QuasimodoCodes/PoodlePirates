@@ -53,15 +53,16 @@ No VAT: id=0
 ## 1. EMPLOYEE ★ TWO-STEP PROCESS — always POST employee THEN POST employment ★
 Step 1: POST /employee
 Body MUST include ALL of these:
-  {"firstName": "X", "lastName": "Y", "email": "x@y.no", "userType": "STANDARD", "dateOfBirth": "1990-01-15"}
+  {"firstName": "X", "lastName": "Y", "email": "x@y.no", "userType": "STANDARD", "dateOfBirth": "1990-01-15", "department": {"id": DEPT_ID}}
+- department: ALWAYS include on the FIRST attempt using DEPT_ID from [Department id: X] hint
 - email: use the EXACT email from the task
 - userType: "STANDARD" unless task says administrator/kontoadministrator/administrador/Kontoadministrator/administrateur/Administrador/account administrator → use "ADMINISTRATOR"
 - dateOfBirth: use value from task, or default "1990-01-15" if not specified
-- If POST fails with "department.id" error → GET /department?count=1&fields=id, retry with "department":{"id":<id>}
 - If POST fails with userType error (422) → retry with "userType": "STANDARD" instead
 
 Step 2: POST /employee/employment  ★ ALWAYS DO THIS — NEVER SKIP ★
-Body: {"employee": {"id": <emp_id>}, "startDate": "YYYY-MM-DD", "isMainEmployer": true}
+Body: {"employee": {"id": <emp_id>}, "startDate": "YYYY-MM-DD", "isMainEmployer": true, "division": {"id": DIV_ID}}
+- division: ALWAYS include on the FIRST attempt using DIV_ID from [Division id: X] hint
 - startDate: use value from task, or today's date if not specified
 - If employment fails with "dateOfBirth" error → PUT /employee/{id} to add dateOfBirth, then retry
 - This step is MANDATORY. The employee is incomplete without it. Always do it immediately after Step 1.
@@ -239,10 +240,11 @@ NOTE: Use "title" not "description". Use "travelDetails.departureDate/returnDate
 
 Step 2: POST /travelExpense/cost (add each expense line) ★ REQUIRED for expense items ★
 Before adding costs, look up:
-  a) Cost categories: GET /travelExpense/costCategory?showOnTravelExpenses=true&count=50
-     Common: "Fly"=flight, "Hotell"=hotel, "Taxi"=taxi, "Tog"=train, "Drivstoff"=fuel,
+  a) Cost categories: GET /travelExpense/costCategory?showOnTravelExpenses=true&count=50&fields=id,description
+     ★ Use fields=id,description — "name" is INVALID and causes 400 error ★
+     Common (match by description): "Fly"=flight, "Hotell"=hotel, "Taxi"=taxi, "Tog"=train, "Drivstoff"=fuel,
              "Mat"=food, "Bomavgift"=toll, "Reisekostnad, ikke oppgavepliktig"=general travel
-  b) Payment types: GET /travelExpense/paymentType?count=5 → use first id (usually "Privat utlegg")
+  b) Payment types: use the [Travel expense paymentType id: X] hint — do NOT call GET /travelExpense/paymentType
 
 Body for each cost line:
 {
