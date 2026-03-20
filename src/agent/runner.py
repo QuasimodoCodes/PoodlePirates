@@ -164,6 +164,17 @@ async def run_agent(
     except Exception as e:
         log.warning("payment_type_lookup_failed", run_id=run_id, error=str(e))
 
+    try:
+        # Discover travel expense payment type (for /travelExpense/cost)
+        tpt_resp = client.get("/travelExpense/paymentType", params={"count": 5})
+        tpt_values = tpt_resp.get("values", [])
+        if tpt_values:
+            tpt_id = tpt_values[0]["id"]
+            env_hints.append(f"[Travel expense paymentType id: {tpt_id} (use as paymentType:{{\"id\":{tpt_id}}} in /travelExpense/cost)]")
+            log.info("travel_payment_type_found", run_id=run_id, travel_payment_type_id=tpt_id)
+    except Exception as e:
+        log.warning("travel_payment_type_lookup_failed", run_id=run_id, error=str(e))
+
     # Build initial contents
     contents: list[types.Content] = []
 

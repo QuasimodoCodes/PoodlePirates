@@ -205,8 +205,8 @@ POST /project/projectActivity  body: {"project": {"id": <proj_id>}, "activity": 
 
 ---
 
-## 12. TRAVEL EXPENSE (create)
-POST /travelExpense
+## 12. TRAVEL EXPENSE (create with costs) ★ TWO-STEP PROCESS ★
+Step 1: POST /travelExpense (create the header)
 Body: {
   "employee": {"id": <emp_id>},
   "title": "description of travel",
@@ -221,6 +221,25 @@ Body: {
   "department": {"id": <dept_id>}   // optional
 }
 NOTE: Use "title" not "description". Use "travelDetails.departureDate/returnDate" not "startDate/endDate".
+
+Step 2: POST /travelExpense/cost (add each expense line) ★ REQUIRED for expense items ★
+Before adding costs, look up:
+  a) Cost categories: GET /travelExpense/costCategory?showOnTravelExpenses=true&count=50
+     Common: "Fly"=flight, "Hotell"=hotel, "Taxi"=taxi, "Tog"=train, "Drivstoff"=fuel,
+             "Mat"=food, "Bomavgift"=toll, "Reisekostnad, ikke oppgavepliktig"=general travel
+  b) Payment types: GET /travelExpense/paymentType?count=5 → use first id (usually "Privat utlegg")
+
+Body for each cost line:
+{
+  "travelExpense": {"id": <travel_expense_id>},
+  "costCategory": {"id": <category_id>},
+  "paymentType": {"id": <payment_type_id>},
+  "date": "YYYY-MM-DD",
+  "amountCurrencyIncVat": <amount_float>
+}
+★ "paymentType" is an OBJECT {"id": X}, NOT a string ★
+★ "amountCurrencyIncVat" NOT "amount" or "amountNOKInclVAT" ★
+★ "date" NOT "costDate" ★
 
 ---
 

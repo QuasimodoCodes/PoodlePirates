@@ -47,6 +47,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Tripletex AI Accounting Agent", version="0.1.0", lifespan=lifespan)
 
+# Task counter for correlating with competition results
+_task_counter = 0
+
 
 @app.get("/health")
 async def health():
@@ -55,9 +58,13 @@ async def health():
 
 async def _handle_solve(req: SolveRequest):
     """Shared handler for /solve and /solv (typo-safe alias)."""
+    global _task_counter
+    _task_counter += 1
+    task_num = _task_counter
     run_id = str(uuid.uuid4())[:8]
     start = time.time()
-    log.info("solve_start", run_id=run_id, prompt_preview=req.prompt[:120])
+    log.info("solve_start", run_id=run_id, task_num=task_num,
+             prompt_preview=req.prompt[:120])
     try:
         from src.tripletex.client import TripletexClient
         from src.agent.runner import run_agent
@@ -68,9 +75,9 @@ async def _handle_solve(req: SolveRequest):
         await run_agent(client=client, prompt=req.prompt, files=req.files or [], run_id=run_id)
     except Exception as exc:
         elapsed = round(time.time() - start, 2)
-        log.error("solve_failed", run_id=run_id, elapsed=elapsed, error=str(exc))
+        log.error("solve_failed", run_id=run_id, task_num=task_num, elapsed=elapsed, error=str(exc))
     elapsed = round(time.time() - start, 2)
-    log.info("solve_done", run_id=run_id, elapsed=elapsed)
+    log.info("solve_done", run_id=run_id, task_num=task_num, elapsed=elapsed)
     return SolveResponse(status="completed")
 
 
