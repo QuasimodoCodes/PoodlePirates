@@ -195,29 +195,46 @@ async def run_agent(
 
         log.info("agent_iteration", run_id=run_id, iteration=iteration)
 
-        # Call Gemini with retry on rate limit (429)
+        # Call Gemini with model fallback on rate limit (429)
+        MODELS = [settings.gemini_model, "gemini-2.5-flash-lite", "gemini-3-flash-preview"]
         response = None
-        for attempt in range(5):
+        for model in MODELS:
             try:
                 response = ai.models.generate_content(
-                    model=settings.gemini_model,
+                    model=model,
                     contents=contents,
                     config=types.GenerateContentConfig(
                         system_instruction=SYSTEM_PROMPT,
                         tools=TOOLS,
                     ),
                 )
+                if iteration == 0:
+                    log.info("using_model", run_id=run_id, model=model)
                 break
             except Exception as e:
                 err = str(e)
                 if "429" in err or "quota" in err.lower() or "rate" in err.lower():
-                    wait = 10 * (attempt + 1)
-                    log.warning("gemini_rate_limit", run_id=run_id, attempt=attempt, wait=wait)
-                    await asyncio.sleep(wait)
+                    log.warning("gemini_rate_limit", run_id=run_id, model=model)
+                    continue  # try next model
                 else:
                     raise
 
         if response is None:
+            # All models rate limited — wait and retry primary model
+            log.warning("all_models_rate_limited", run_id=run_id, wait=15)
+            await asyncio.sleep(15)
+            try:
+                response = ai.models.generate_content(
+                    model=MODELS[-1],
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_PROMPT,
+                        tools=TOOLS,
+                    ),
+                )
+            except Exception:
+                log.error("gemini_failed_all_models", run_id=run_id)
+                break
             log.error("gemini_failed_all_retries", run_id=run_id)
             break
 
