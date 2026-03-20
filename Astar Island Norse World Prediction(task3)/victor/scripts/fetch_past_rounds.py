@@ -82,7 +82,8 @@ def main():
                 }
                 with open(save_path, "w") as f:
                     json.dump(payload, f)
-                print(f"  Seed {seed_idx}: ✅ saved  (score={analysis.score:.1f})")
+                score_str = f"{analysis.score:.1f}" if analysis.score is not None else "N/A (no submission)"
+                print(f"  Seed {seed_idx}: ✅ saved  (score={score_str})")
 
             except Exception as e:
                 print(f"  Seed {seed_idx}: ❌ {e}")
