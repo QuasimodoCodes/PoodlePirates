@@ -32,13 +32,14 @@ import argparse
 
 from src.api.client import AstarClient
 from src.model.initial_analyzer import analyze, build_seed_maps
-from src.model.terrain_estimator import estimate_all_seeds
+from src.model.terrain_estimator import estimate_all_seeds, load_transition_matrix
+from src.model.round_calibrator import calibrate, save_calibrated_matrix
 from src.observation.query_planner import build_query_plan, print_plan_summary
 from src.observation.runner import run as run_observations, load_all_observations
 from src.prediction.tensor_builder import build_and_save_all
 import config
 
-ROUND_ID = "8e839974-b13b-407b-a5e7-fc749d877195"
+ROUND_ID = "fd3c92ff-3178-4dc9-8d9b-acf389b3982b"
 
 
 def load_token() -> str:
@@ -132,18 +133,30 @@ def main():
     else:
         run_observations(client, ROUND_ID, queries)
 
-    # ── 6. Build predictions ─────────────────────────────────────────
-    section("6. Build Predictions")
+    # ── 6. Calibrate round prior ──────────────────────────────────────
+    section("6. Calibrate Round Prior")
     observations = load_all_observations()
     print(f"  Loaded {len(observations)} saved observation files.")
+
+    if not args.no_observe and observations:
+        with open(os.path.join(config.DATA_DIR, "initial_states.json")) as f:
+            raw_initial = json.load(f)
+        historical = load_transition_matrix(calibrated=False)
+        blended = calibrate(raw_initial, observations, historical, verbose=True)
+        save_calibrated_matrix(blended)
+    else:
+        print("  Skipping calibration — no observations available.")
+
+    # ── 7. Build predictions ──────────────────────────────────────────
+    section("7. Build Predictions")
     tensors = estimate_all_seeds(seed_maps, observations=observations)
 
-    # ── 7. Validate + save tensors ───────────────────────────────────
-    section("7. Validate & Save Tensors")
+    # ── 8. Validate + save tensors ───────────────────────────────────
+    section("8. Validate & Save Tensors")
     build_and_save_all(tensors)
 
-    # ── 8. Submit ────────────────────────────────────────────────────
-    section("8. Submit")
+    # ── 9. Submit ────────────────────────────────────────────────────
+    section("9. Submit")
     if args.dry_run:
         print("  [DRY RUN] — would submit 5 tensors. Skipping.")
         return

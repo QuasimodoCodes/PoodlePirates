@@ -43,12 +43,28 @@ N_CLASSES = config.NUM_TERRAIN_CLASSES
 # TRANSITION MATRIX LOADER
 # ─────────────────────────────────────────────
 
-def load_transition_matrix() -> Dict[int, List[float]]:
+def load_transition_matrix(calibrated: bool = True) -> Dict[int, List[float]]:
     """
-    Load data/transition_matrix.json built from past rounds.
-    Returns: {initial_code: [P(class0), ..., P(class5)]}
-    Falls back to uniform if file not found.
+    Load transition matrix. Prefers round_calibrated_matrix.json if available
+    (built from this round's observations). Falls back to historical matrix.
+
+    Args:
+        calibrated: if True, use round-calibrated matrix when available
     """
+    # Try calibrated matrix first
+    if calibrated:
+        cal_path = os.path.join(config.DATA_DIR, "round_calibrated_matrix.json")
+        if os.path.exists(cal_path):
+            with open(cal_path) as f:
+                data = json.load(f)
+            matrix = {int(k): v for k, v in data["transition_matrix"].items()}
+            for code in [0, 1, 2, 3, 4, 5, 10, 11]:
+                if code not in matrix:
+                    matrix[code] = [1.0 / N_CLASSES] * N_CLASSES
+            print("  Using round-calibrated transition matrix.")
+            return matrix
+
+    # Fall back to historical matrix
     path = os.path.join(config.DATA_DIR, "transition_matrix.json")
     if not os.path.exists(path):
         print("  ⚠️  transition_matrix.json not found — using uniform prior.")
@@ -62,11 +78,11 @@ def load_transition_matrix() -> Dict[int, List[float]]:
     for code_str, dist in data["transition_matrix"].items():
         matrix[int(code_str)] = dist
 
-    # Fill missing codes with uniform
     for code in [0, 1, 2, 3, 4, 5, 10, 11]:
         if code not in matrix:
             matrix[code] = [1.0 / N_CLASSES] * N_CLASSES
 
+    print("  Using historical transition matrix (no calibrated matrix found).")
     return matrix
 
 

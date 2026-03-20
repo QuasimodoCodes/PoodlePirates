@@ -56,11 +56,22 @@ When this table is filled, replace Layer C spatial rules with `transition_prior[
 
 ---
 
+## Round 4 Results — 2026-03-20
+
+- [RESULT] Leaderboard score: **71.7 / 100** — rank #88. Above CV best of 67 and offline test best of 71.62.
+- [LEARN] Round 4 dynamics matched transition matrix well. Settlement→Forest slightly higher (+4%). Port→Forest outlier but n=14 too small to trust.
+- [LEARN] 50 Bayesian queries added ~8 points over zero-query baseline (~63.66). Full map scan confirmed effective.
+- [FIX] Removed double-submission — query first, submit once.
+- [NOTE] Round 4 ground truth (8e839974) still 401 from /analysis — retry after round 5.
+
+---
+
 ## α Calibration History
 
 | Round | α used | Result | Next α |
 |-------|--------|--------|--------|
-| —     | 0.55   | pending | —     |
+| 4     | 0.55   | 71.7   | 0.55 (keep) |
+| 5     | 0.55   | pending | — |
 
 ---
 
@@ -68,8 +79,8 @@ When this table is filled, replace Layer C spatial rules with `transition_prior[
 
 | Round | Rule | Boost used | Was it right? | Next value |
 |-------|------|-----------|---------------|------------|
-| —     | Settlement adj. | +0.15 | pending | — |
-| —     | Coastal Port    | +0.20 | pending | — |
-| —     | Mountain block  | -0.10 | pending | — |
-| —     | Far from settlement | +0.15/+0.10 | pending | — |
-| —     | Isolated forest | +0.20 | pending | — |
+| 4     | Settlement adj. | +0.15 | yes — Settlement survival ~28% confirmed | keep |
+| 4     | Coastal Port    | +0.20 | yes — Port cells rare, matrix holds | keep |
+| 4     | Mountain block  | -0.10 | yes — Mountain 100% static | keep |
+| 4     | Far from settlement | +0.15/+0.10 | yes — Plains→Empty 83-85% confirmed | keep |
+| 4     | Isolated forest | +0.20 | yes — Forest 79-81% stable confirmed | keep |
