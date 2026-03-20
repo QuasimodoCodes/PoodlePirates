@@ -1,11 +1,12 @@
 import asyncio
+import os
 from src.tripletex.client import TripletexClient
 from src.agent.runner import run_agent
 
 async def main():
     client = TripletexClient(
-        "https://tx-proxy-jwanbnu3pq-lz.a.run.app/v2",
-        "JbFWuZmXV6W48IVrEYKWCb9TsXNqKrDlJUeg97Hi_qk"
+        os.environ.get("TRIPLETEX_PROXY_URL", ""),
+        os.environ.get("TRIPLETEX_SESSION_TOKEN", "")
     )
     await run_agent(
         client=client,

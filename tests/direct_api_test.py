@@ -1,10 +1,11 @@
 """Direct API test — validates all task types work correctly without Gemini."""
 import httpx
 import json
+import os
 import sys
 
-BASE = "https://kkpqfuj-amager.tripletex.dev/v2"
-TOKEN = "eyJ0b2tlbklkIjoyMTQ3NjI4NTAwLCJ0b2tlbiI6ImY0NTlkMTU3LTNlODEtNDRkYi1hOGU5LWY5ZDIyMDAzZDU4YyJ9"
+BASE = os.environ.get("SANDBOX_BASE", "https://kkpqfuj-amager.tripletex.dev/v2")
+TOKEN = os.environ.get("SANDBOX_TOKEN", "")
 AUTH = ("0", TOKEN)
 
 results = []

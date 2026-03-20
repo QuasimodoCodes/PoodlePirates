@@ -16,13 +16,15 @@ import sys
 import time
 import traceback
 from dataclasses import dataclass, field, asdict
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import httpx
+import os
 
 # ── Sandbox credentials ────────────────────────────────────────────────────────
-SANDBOX_BASE = "https://kkpqfuj-amager.tripletex.dev/v2"
-SANDBOX_TOKEN = "eyJ0b2tlbklkIjoyMTQ3NjI4NTAwLCJ0b2tlbiI6ImY0NTlkMTU3LTNlODEtNDRkYi1hOGU5LWY5ZDIyMDAzZDU4YyJ9"
+SANDBOX_BASE = os.environ.get("SANDBOX_BASE", "https://kkpqfuj-amager.tripletex.dev/v2")
+SANDBOX_TOKEN = os.environ.get("SANDBOX_TOKEN", "")
 AGENT_URL = "http://localhost:8000/solve"
 
 AUTH = ("0", SANDBOX_TOKEN)
@@ -338,7 +340,6 @@ def verify_timesheet(first: str, last: str, date: str, **kw) -> dict:
     values = r.json().get("values", [])
     checks = {"timesheet_found": False}
 
-    from datetime import datetime, timedelta
     dt = datetime.strptime(date, "%Y-%m-%d")
     date_next = (dt + timedelta(days=1)).strftime("%Y-%m-%d")
 

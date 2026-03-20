@@ -17,8 +17,6 @@ from src.agent.runner import run_agent
 from src.config import settings
 from src.tripletex.client import TripletexClient
 
-from src.config import settings
-
 log = structlog.get_logger()
 
 
