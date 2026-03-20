@@ -100,38 +100,49 @@
     },
     {
       "step_number": 9,
-      "description": "Terrain Estimator — src/model/terrain_estimator.py: build per-cell H×W×6 probability distributions using 3 stacked layers.",
+      "description": "Terrain Estimator — src/model/terrain_estimator.py: build per-cell H×W×6 probability distributions using 3 stacked layers. KEY FIX: n=1 observation is NOT treated as an empirical distribution — it is a Bayesian update on the spatial prior.",
       "status": "pending",
       "files": ["src/model/terrain_estimator.py"],
+      "n1_problem": "Full scan gives each cell exactly 1 observation per seed. Seeds have different maps — cannot pool across seeds. Treating n=1 as 95% confidence is a delta function, not a distribution. Fix: Bayesian smoothing.",
       "layers": {
         "LAYER_A_static": {
-          "what": "Cells classified STATIC from initial_states",
-          "Mountain_code5": "predict [1e-5, 1e-5, 1e-5, 1e-5, 1e-5, ~0.99995] — never changes",
-          "Ocean_code10": "predict [~0.99995, 1e-5, 1e-5, 1e-5, 1e-5, 1e-5] — never changes",
-          "floor": "1e-5 (excluded from scoring weight, but avoids log(0) edge cases)"
+          "what": "Cells classified STATIC from initial_states (Mountain code 5, Ocean code 10)",
+          "Mountain": "predict [1e-5, 1e-5, 1e-5, 1e-5, 1e-5, ~0.99995] — never changes",
+          "Ocean":    "predict [~0.99995, 1e-5, 1e-5, 1e-5, 1e-5, 1e-5] — never changes",
+          "floor": "1e-5 — these cells excluded from scoring weight anyway",
+          "priority": "HIGHEST — overrides everything"
         },
-        "LAYER_B_observed": {
-          "what": "Cells we directly observed via simulate() — empirical Monte Carlo",
-          "how": "Count class occurrences across all queries for this cell → divide by total → empirical frequency",
-          "note": "simulate() returns YEAR-50 state. Frequencies ARE the distribution we want.",
-          "floor": "0.01 floor on all 6 classes, then renormalize"
+        "LAYER_B_bayesian": {
+          "what": "Cells we observed once via simulate() — Bayesian update on spatial prior",
+          "formula": "posterior = (1 - α) × spatial_prior(cell)  +  α × one_hot(observed_class)",
+          "alpha": "α = 0.55 (default) — how much weight to give our single observation vs prior",
+          "alpha_rationale": "With n=1, we trust our observation more than pure prior but acknowledge high uncertainty. Tune this after Round 1 analysis.",
+          "example": "Prior=[0.30,0.20,0.20,0.10,0.15,0.05], observe class 2 (Port) → posterior≈[0.14,0.09,0.56,0.05,0.07,0.02] — Port boosted but real uncertainty remains",
+          "floor": "0.01 floor on all 6 classes, then renormalize",
+          "priority": "MIDDLE — overrides Layer C, overridden by Layer A"
         },
         "LAYER_C_spatial_prior": {
-          "what": "Unobserved dynamic cells — use domain knowledge, NOT just global frequency",
+          "what": "Fallback for any unobserved cells (shouldn't exist with full scan, but kept as safety net)",
+          "base": "Global observed terrain frequency across all queries as starting distribution",
           "rules": [
-            "Adjacent to initial Settlement (code 1): raise P(class 1) +0.15, P(class 2) +0.10, P(class 3) +0.08 — expansion zone",
-            "Coastal cell (adj to Ocean) + near initial Settlement: raise P(class 2) Port +0.20 — ports need coast",
-            "Adjacent to Mountain (code 5): lower P(class 1) Settlement -0.10 — mountains block expansion",
-            "Distance > 5 cells from ANY initial settlement: raise P(class 0) +0.15, P(class 4) +0.10 — frontier land stays wild",
-            "Initial Forest (code 4) with no nearby settlement: raise P(class 4) +0.20 — forest is mostly static",
-            "Cell was initial Settlement/Port (code 1/2): already observed → goes to Layer B"
+            "Adjacent to initial Settlement (code 1): +0.15 P(class1), +0.10 P(class2), +0.08 P(class3) — expansion zone",
+            "Coastal cell + near initial Settlement: +0.20 P(class2 Port) — ports need coast access",
+            "Adjacent to Mountain (code 5): -0.10 P(class1 Settlement) — mountains block expansion",
+            "Distance > 5 cells from ANY initial settlement: +0.15 P(class0), +0.10 P(class4) — frontier stays wild",
+            "Initial Forest (code 4) isolated from settlements: +0.20 P(class4) — forest is mostly static"
           ],
-          "how": "Start from global observed terrain frequency as base prior. Apply additive boosts from rules above. Clip to [0,1]. Apply 0.01 floor. Renormalize.",
-          "why": "Pure global frequency ignores that settlements cluster, forests persist, and coasts attract ports. Spatial rules use the sim mechanics we already know for free."
+          "how": "Apply rules additively. Clip to [0,1]. Apply 0.01 floor. Renormalize.",
+          "also_used_as": "The prior fed into Layer B's Bayesian update — so Layer C always runs first",
+          "priority": "LOWEST — fallback only"
         }
       },
-      "simulate_returns_year_50": "Each simulate() call runs the FULL 50-year sim — we observe year-50 state, NOT year-0. Empirical frequency across queries IS our Monte Carlo estimate.",
-      "order_of_priority": "Layer A overrides all. Layer B overrides Layer C. Layer C fills the gaps."
+      "order_of_operations": "1. Compute Layer C spatial prior for every cell. 2. For observed cells: Layer B Bayesian update using Layer C as prior. 3. For static cells: override with Layer A. 4. Apply floors. 5. Renormalize.",
+      "tunable_params": {
+        "alpha": "0.55 — controls single-observation confidence. Tune post-Round 1 using learning_log.",
+        "spatial_boost_weights": "The +0.15/+0.10/+0.08 values in Layer C rules — tune from round history.",
+        "floor_dynamic": "0.01 — tune down if scores show we're over-smoothing.",
+        "floor_static": "1e-5 — leave alone."
+      }
     },
     {
       "step_number": 10,
@@ -147,10 +158,33 @@
     },
     {
       "step_number": 12,
-      "description": "Submit & Score — post all 5 seeds, record score + timestamp in data/scores.json. Compare to previous best. If better: create PR victor → main and ask user to confirm merge. If not: go back to step 9 and improve model. Use GET /analysis post-round to understand where we lost points.",
+      "description": "Submit & Score — POST /submit for all 5 seeds. Record score in data/scores.json. If better than previous best: propose PR victor → main (ask user first). If not: loop back to Step 9.",
       "status": "pending",
       "files": ["data/scores.json"],
-      "branch_rule": "No push to remote. No merge to main. Create PR only when score is verified better than previous best."
+      "branch_rule": "No push to remote. No merge to main. PR only when score confirmed better than previous best — always ask user."
+    },
+    {
+      "step_number": 13,
+      "description": "Post-Round Analysis & Learning Log — scripts/post_round_analysis.py: fetch ground truth via GET /analysis, compare cell-by-cell against our predictions, write findings to data/round_history/ and learning_log.md. This is how we improve each round.",
+      "status": "pending",
+      "files": [
+        "scripts/post_round_analysis.py",
+        "data/round_history/round_{id}/prediction_seed{n}.npy",
+        "data/round_history/round_{id}/ground_truth_seed{n}.npy",
+        "data/round_history/round_{id}/per_cell_kl_seed{n}.npy",
+        "data/round_history/round_{id}/summary.json",
+        "learning_log.md"
+      ],
+      "what_to_track": {
+        "per_cell_kl": "Which cells hurt us most? → tells us where Layer C rules are wrong",
+        "per_class_error": "Did we systematically underpredict Ruin? Overpredict Port? → adjust Layer C boosts",
+        "per_initial_code_error": "Cells starting as Settlement → what did they actually become? → builds transition matrix",
+        "alpha_calibration": "Was our α=0.55 too confident or not confident enough? → tune for next round",
+        "regional_patterns": "Are we worse inland vs coastal? Near mountains? → refine spatial rules",
+        "score_history": "Track score per round to see if we're actually improving"
+      },
+      "learning_log_format": "Append one entry per round. Max 5 bullet points per round. Focus on surprises — things that were systematically wrong, not random errors.",
+      "feeds_into": "Round 2: update α and Layer C boost weights. Round 3+: replace Layer C with data-driven transition matrix from accumulated round_history."
     }
   ]
 }

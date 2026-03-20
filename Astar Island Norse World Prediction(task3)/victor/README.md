@@ -2,14 +2,14 @@
 ```
 ╔═══════════════════════════════════════════════════════════════════════════════════╗
 ║                                                                                   ║
-║    ██╗   ██╗██╗██╗  ██╗██╗███╗   ██╗ ██████╗                                    ║
-║    ██║   ██║██║██║ ██╔╝██║████╗  ██║██╔════╝                                    ║
-║    ██║   ██║██║█████╔╝ ██║██╔██╗ ██║██║  ███╗                                   ║
-║    ╚██╗ ██╔╝██║██╔═██╗ ██║██║╚██╗██║██║   ██║                                   ║
-║     ╚████╔╝ ██║██║  ██╗██║██║ ╚████║╚██████╔╝                                   ║
-║      ╚═══╝  ╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝ ╚═════╝                                   ║
+║    ██╗   ██╗██╗██╗  ██╗██╗███╗   ██╗ ██████╗                                      ║
+║    ██║   ██║██║██║ ██╔╝██║████╗  ██║██╔════╝                                      ║
+║    ██║   ██║██║█████╔╝ ██║██╔██╗ ██║██║  ███╗                                     ║
+║    ╚██╗ ██╔╝██║██╔═██╗ ██║██║╚██╗██║██║   ██║                                     ║
+║     ╚████╔╝ ██║██║  ██╗██║██║ ╚████║╚██████╔╝                                     ║
+║      ╚═══╝  ╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝ ╚═════╝                                      ║
 ║                                                                                   ║
-║           N O R S E   W O R L D   P R E D I C T I O N                           ║
+║           N O R S E   W O R L D   P R E D I C T I O N                             ║
 ║                    Team: Poodle Pirates  |  Author: Victor                        ║
 ╚═══════════════════════════════════════════════════════════════════════════════════╝
 ```
@@ -29,7 +29,7 @@
 │  You get 50 questions. That's it.                               │
 │                                                                 │
 │  GOAL: Predict the probability distribution of terrain          │
-│        across the ENTIRE map — for each of 5 parallel worlds.  │
+│        across the ENTIRE map — for each of 5 parallel worlds.   │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -42,10 +42,10 @@
   ┌────────────────────────────────────────┐
   │▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓│  ▓ = Ocean   (static, class 0)
   │▓▓░░░░░░░░░░░▲▲▲░░░░░░░░░░░░░░░░░░░░▓▓│  ░ = Plains  (dynamic, class 0)
-  │▓▓░░░S░░░░░░▲▲▲▲▲░░░░░░░░F░░░F░░░░░▓▓│  ▲ = Mountain(static, class 5)
-  │▓▓░░░░░░░░░░░▲▲▲░░░░░░░░░F░F░F░░░S░▓▓│  F = Forest  (mostly static)
-  │▓▓░░░░S░░░░░░░░░░░░░░░░░░░░░░░░░░░░▓▓│  S = Settlement (dynamic!)
-  │▓▓░░░░░░░░░░░░░░░░░░░P░░░░░░░░░░░░░▓▓│  P = Port    (dynamic!)
+  │▓▓░░░S░░░░░░▲▲▲▲▲░░░░░░░░F░░░F░░░░░░▓▓│  ▲ = Mountain(static, class 5)
+  │▓▓░░░░░░░░░░░▲▲▲░░░░░░░░░F░F░F░░░S░░▓▓│  F = Forest  (mostly static)
+  │▓▓░░░░S░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▓▓│  S = Settlement (dynamic!)
+  │▓▓░░░░░░░░░░░░░░░░░░░P░░░░░░░░░░░░░░▓▓│  P = Port    (dynamic!)
   │▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓│
   └────────────────────────────────────────┘
          ↑ THIS is what we must predict
@@ -91,25 +91,25 @@
 ```
   ┌─────────────────────────────────────────────────────────────────┐
   │                                                                 │
-  │  Ground Truth = Monte Carlo average of HUNDREDS of sim runs    │
-  │  → It's a probability distribution, not a single answer        │
+  │  Ground Truth = Monte Carlo average of HUNDREDS of sim runs     │
+  │  → It's a probability distribution, not a single answer         │
   │                                                                 │
-  │  KL(p ║ q) = Σᵢ pᵢ × log(pᵢ / qᵢ)   ← per cell              │
+  │  KL(p ║ q) = Σᵢ pᵢ × log(pᵢ / qᵢ)   ← per cell                  │
   │                                                                 │
-  │  weighted_kl = Σ [entropy(cell) × KL(cell)]                    │
+  │  weighted_kl = Σ [entropy(cell) × KL(cell)]                     │
   │                ─────────────────────────────                    │
   │                      Σ entropy(cell)                            │
   │                                                                 │
-  │  score = max(0, min(100,  100 × exp(-3 × weighted_kl)))        │
+  │  score = max(0, min(100,  100 × exp(-3 × weighted_kl)))         │
   │                                                                 │
-  │  ⚡ Static cells (Mountain, Ocean) → entropy ≈ 0 → EXCLUDED   │
+  │  ⚡ Static cells (Mountain, Ocean) → entropy ≈ 0 → EXCLUDED    │
   │  ⚡ High-uncertainty dynamic cells → weighted MOST             │
+  │                                                                │
+  │  ☠️  NEVER assign 0.0 — if ground truth pᵢ > 0 and             │
+  │      your qᵢ = 0 → log(pᵢ/0) = ∞ → cell score DESTROYED         │
   │                                                                 │
-  │  ☠️  NEVER assign 0.0 — if ground truth pᵢ > 0 and            │
-  │      your qᵢ = 0 → log(pᵢ/0) = ∞ → cell score DESTROYED      │
-  │                                                                 │
-  │  FIX:  prediction = np.maximum(prediction, 0.01)               │
-  │        prediction /= prediction.sum(axis=-1, keepdims=True)    │
+  │  FIX:  prediction = np.maximum(prediction, 0.01)                │
+  │        prediction /= prediction.sum(axis=-1, keepdims=True)     │
   └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -139,13 +139,13 @@
 ```
   TILE GRID STRATEGY: anchors at [0, 15, 25]
   ┌──────────────────────────────────────────┐
-  │ (0,0)──────(15,0)──────(25,0)           │
-  │   │  tile1  │  tile2  │  tile3  │       │
-  │ (0,15)────(15,15)────(25,15)            │
-  │   │  tile4  │  tile5  │  tile6  │       │
-  │ (0,25)────(15,25)────(25,25)            │
-  │   │  tile7  │  tile8  │  tile9  │       │
-  │                                   40×40 │
+  │ (0,0)──────(15,0)──────(25,0)            │
+  │   │  tile1  │  tile2  │  tile3  │        │
+  │ (0,15)────(15,15)────(25,15)             │
+  │   │  tile4  │  tile5  │  tile6  │        │
+  │ (0,25)────(15,25)────(25,25)             │
+  │   │  tile7  │  tile8  │  tile9  │        │
+  │                                   40×40  │
   └──────────────────────────────────────────┘
   9 tiles × 5 seeds = 45 queries → full map observed every seed
   Note: anchors at 25 (not 30) so tiles stay within map bounds
