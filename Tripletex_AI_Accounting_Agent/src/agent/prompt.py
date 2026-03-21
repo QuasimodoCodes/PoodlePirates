@@ -87,7 +87,8 @@ Body:
 ★ annualSalary: extract yearly salary figure from task/PDF ★
 ★ workingHoursScheme: "NOT_SHIFT" for standard day work (default); "ROUND_THE_CLOCK" for 24/7 ★
 ★ occupationCode: if PDF has an occupation/STYRK/ISCO code, look it up first:
-   GET /employee/employment/occupationCode?name=<job_title>&count=3&fields=id,name,code
+   GET /employee/employment/occupationCode?code=<4digit_code>&count=3&fields=id,code
+   ★ OccupationCodeDTO has NO "name" field — use "code" or "nameNO" only ★
    Use returned id in {"id": <occ_id>}. If not found, omit occupationCode entirely. ★
 ★ If employmentDetails causes 422 → post employment WITHOUT employmentDetails, then add details separately:
    POST /employee/employment/details {"employment":{"id":<emp_id>},"date":"YYYY-MM-DD","employmentType":"ORDINARY","remunerationType":"MONTHLY_WAGE","workingHoursScheme":"NOT_SHIFT","percentageOfFullTimeEquivalent":<pct>,"annualSalary":<salary>} ★
@@ -210,18 +211,18 @@ When an invoice was issued in a foreign currency at one rate, but payment arrive
 
   Step 1: GET /invoice with invoiceDateFrom/To → find invoice; note its NOK amount
   Step 2: Register payment (use actual NOK received):
-    PUT /invoice/{id}/:payment  params={"paymentDate":"YYYY-MM-DD","paymentTypeId":<hint>,"paidAmount":63806.0}
-  Step 3: Post FX gain as separate voucher (date = payment date):
+    PUT /invoice/{id}/:payment  params={"paymentDate":"YYYY-MM-DD","paymentTypeId":<hint>,"paidAmount":63806.0,"paidAmountCurrency":63806.0}
+  Step 3: Post FX gain/loss as separate voucher (date = payment date):
     POST /ledger/voucher  body:
       {"date": "YYYY-MM-DD", "description": "Valutagevinst EUR/NOK",
        "postings": [
-         {"row":1, "account":{"id":<1500_id>}, "amountGrossCurrency":-1302.50, "currency":{"id":1}},
+         {"row":1, "account":{"id":<1500_id>}, "customer":{"id":<cust_id>}, "amountGrossCurrency":-1302.50, "currency":{"id":1}},
          {"row":2, "account":{"id":<8060_id>}, "amountGrossCurrency": 1302.50, "currency":{"id":1}}
        ]}
   ★ Account 8060 = Valutagevinst (currency gain); 8071 = Valutatap (currency loss) ★
   ★ If fx_gain < 0 (loss): flip signs — debit 8071, credit 1500 ★
+  ★★★ Account 1500 postings MUST have "customer":{"id":<cust_id>} — omitting causes "Kunde mangler" 422 ★★★
   ★ Use [Account IDs] or [Missing task accounts] hints for account 8060/1500 IDs ★
-  ★ 1500 = Kundefordringer (accounts receivable) ★
 
 ---
 
@@ -934,4 +935,7 @@ tax = net_result × 0.22
 - Use "accountingDimension":{"id":X} for dimension values (correct is "dimensionIndex": <integer>)
 - Add "specType", "type", "payslipType" or other invented fields to salary specification objects (valid fields: salaryType, rate, count, amount, description ONLY)
 - Keep retrying the SAME wrong field name on 422 — call tripletex_schema instead to discover correct fields
+- Post to account 1500 (Kundefordringer) or 2400 (Leverandørgjeld) without including "customer":{"id":X} or "supplier":{"id":X} on the posting — these accounts REQUIRE the linked entity
+- Use "name" in fields filter for OccupationCodeDTO (use "nameNO" or "code") or CurrencyDTO (use "code")
+- Use date 2026-02-29 or other invalid dates — 2026 is NOT a leap year (use Feb 28)
 """

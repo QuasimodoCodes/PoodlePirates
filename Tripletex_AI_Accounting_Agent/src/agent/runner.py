@@ -193,12 +193,44 @@ TOOLS = [
 
 # ── Tool execution ─────────────────────────────────────────────────────────────
 
+def _fix_date(d: str) -> str:
+    """Fix invalid dates like Feb 29 in non-leap years."""
+    import calendar
+    if not isinstance(d, str) or len(d) != 10:
+        return d
+    try:
+        parts = d.split("-")
+        y, m, day = int(parts[0]), int(parts[1]), int(parts[2])
+        max_day = calendar.monthrange(y, m)[1]
+        if day > max_day:
+            return f"{y:04d}-{m:02d}-{max_day:02d}"
+    except (ValueError, IndexError):
+        pass
+    return d
+
+
+def _fix_fields_param(path: str, params: dict | None) -> dict | None:
+    """Fix invalid field names for specific DTOs."""
+    if not params or "fields" not in params:
+        return params
+    fields = params["fields"]
+    if "occupationCode" in path and "name" in fields.split(","):
+        params["fields"] = fields.replace("name", "nameNO")
+    elif "/currency" in path and "name" in fields.split(","):
+        params["fields"] = fields.replace("name", "code")
+    return params
+
+
 def _execute_tool(name: str, args: dict, client: TripletexClient) -> dict:
     try:
         if name == "tripletex_get":
-            return client.get(args["path"], params=args.get("params"))
+            params = _fix_fields_param(args["path"], args.get("params"))
+            return client.get(args["path"], params=params)
         elif name == "tripletex_post":
             body = args["body"]
+            # Auto-fix: dates (e.g. Feb 29 in non-leap year)
+            if "date" in body:
+                body["date"] = _fix_date(body["date"])
             # Auto-fix: ensure amountGross == amountGrossCurrency on every voucher posting
             if "postings" in body and isinstance(body["postings"], list):
                 for posting in body["postings"]:
@@ -211,7 +243,10 @@ def _execute_tool(name: str, args: dict, client: TripletexClient) -> dict:
             # Auto-fix: ensure paidAmountCurrency = paidAmount on payment calls
             if "/:payment" in args.get("path", "") and "paidAmount" in params:
                 params.setdefault("paidAmountCurrency", params["paidAmount"])
-            return client.put(args["path"], body=args["body"], params=params)
+            body = args.get("body") or {}
+            if "date" in body:
+                body["date"] = _fix_date(body["date"])
+            return client.put(args["path"], body=body, params=params)
         elif name == "tripletex_delete":
             client.delete(args["path"])
             return {"status": "deleted"}
