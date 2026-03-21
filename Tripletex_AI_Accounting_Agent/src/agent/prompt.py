@@ -471,34 +471,32 @@ When a file is attached (receipt image or PDF) OR task mentions "kvittering"/"ut
 ---
 
 ## 17b. INCOMING / SUPPLIER INVOICE (non-receipt, e.g. "register this supplier invoice")
+★ NEVER use /incomingInvoice — competition accounts always return 403. Go DIRECTLY to POST /ledger/voucher ★
+
 Steps:
-1. Search supplier: GET /supplier?organizationNumber=X&count=5&fields=id,name
-   - If not found → POST /supplier {name, organizationNumber, isSupplier: true}
-2. Find expense account: GET /ledger/account?number=XXXX&fields=id,number,name
-3. POST /incomingInvoice?sendTo=ledger
-   Body: {
-     "invoiceHeader": {
-       "vendorId": <supplier_id_integer>,
-       "invoiceDate": "YYYY-MM-DD",
-       "dueDate": "YYYY-MM-DD",
-       "currencyId": 1,
-       "invoiceAmount": <total_including_vat>,
-       "invoiceNumber": "INV-xxx",
-       "description": "..."
-     },
-     "orderLines": [
-       {
-         "externalId": "line-1",
-         "row": 1,
-         "description": "...",
-         "accountId": <expense_account_id_integer>,
-         "amountInclVat": <total_including_vat>,
-         "vatTypeId": <vat_type_id_integer>,
-         "count": 1
-       }
-     ]
-   }
-   ★ CRITICAL: If 403 → DO NOT RETRY — immediately use POST /ledger/voucher (same as Section 17 above) ★
+1. Parse PDF/file or task text: supplier name, org number, invoice date, total amount INCL. VAT, description of goods/services
+2. Find or create supplier:
+   GET /supplier?organizationNumber=<org>&count=1&fields=id,name
+   If not found → POST /supplier {name, organizationNumber, isSupplier: true}
+3. Pick expense account from [Account IDs] hint based on item/service:
+   - Office equipment / furniture: 6540
+   - Office supplies / stationery: 7000
+   - IT equipment / computers: 6540 or 6554
+   - Phone / telecom: 7100
+   - Consulting / professional services: 6900
+   - Other external services: 6800
+   - Freight / shipping: 6700
+4. POST /ledger/voucher with exactly 3 postings (sum MUST = 0):
+   ★ VAT MATH — invoice total is INCL. VAT: ★
+     net = total_incl / 1.25          (for 25% VAT — most B2B invoices)
+     vat = total_incl - net
+   
+   Posting 1: account=<expense_acct_id>,  amountGrossCurrency= net,         row=1, description=<item description>
+   Posting 2: account=<2710_id>,           amountGrossCurrency= vat,         row=2, description="Inngående MVA 25%"
+   Posting 3: account=<2400_id>,           amountGrossCurrency=-total_incl,  row=3, description="Leverandørgjeld", supplier:{id:<supplier_id>}
+   
+   Voucher date = invoice date from PDF. Description = "Leverandørfaktura - <supplier_name>"
+   ★ 2710 = input VAT account | 2400 = accounts payable — use IDs from [Account IDs] hint ★
 
 ---
 
@@ -617,6 +615,36 @@ Use extracted values directly in API calls — do not ask for clarification.
 
 ---
 
+## 23. LEDGER ANALYSIS → PROJECT/ACTIVITY CREATION (Tier 3)
+When task asks to analyze the ledger (libro mayor / Hauptbuch / grand livre / general ledger) to identify accounts with the highest increase between two periods, then create projects and/or activities:
+
+### Step 1: Fetch postings for both periods IN PARALLEL (one tool call per period)
+★ Make BOTH GET calls in the SAME response as parallel tool calls ★
+GET /ledger/posting?dateFrom=2026-01-01&dateTo=2026-01-31&count=1000&fields=account(id,number,name),amountGrossCurrency
+GET /ledger/posting?dateFrom=2026-02-01&dateTo=2026-02-28&count=1000&fields=account(id,number,name),amountGrossCurrency
+(Adjust date ranges to what the task specifies: "enero a febrero" = Jan vs Feb 2026)
+
+### Step 2: Calculate per-account increase
+- Group all postings by account number
+- For expense accounts (number 4000–8999): SUM amountGrossCurrency per period
+- Increase = period2_total - period1_total  (positive = costs increased more in period 2)
+- Sort descending by increase, take top 3
+★ Focus on cost/expense accounts (4000-8999) — revenue accounts (3xxx) are NOT costs ★
+
+### Step 3: Create projects + activities — ONE account at a time (sequential)
+GET /employee?count=1&fields=id  ← only call ONCE, reuse emp_id for all 3 projects
+
+For account1, then account2, then account3:
+  POST /project {"name": "<account_name>", "startDate": "<today>", "projectManager": {"id": <emp_id>}, "isInternal": true}
+  POST /activity {"name": "<account_name>", "isGeneralActivity": false}
+  POST /project/projectActivity {"project": {"id": <proj_id>}, "activity": {"id": <act_id>}}
+
+★ Use the ACCOUNT NAME (not number) as both project name and activity name ★
+★ "isInternal: true" if task says "proyecto interno" / "internal project" ★
+★ 3 accounts = 1 employee GET + 3×(POST project + POST activity + POST projectActivity) = 10 calls total ★
+
+---
+
 ## 21. YEAR-END CLOSING (årsoppgjør / forenkla årsoppgjør / Tier 3)
 When task mentions "årsoppgjør", "årsoppgjer", "avskrivinger", "skattekostnad", "periodisering", "forskotsbetalt":
 
@@ -672,6 +700,7 @@ tax = net_result × 0.22
 5. Do NOT do verification GETs after creating — the POST response contains the id.
 
 ## TASK PATTERNS (match the task to the FIRST pattern that fits)
+- "Ledger analysis → create projects" (analice el libro mayor, identify expense accounts, identifisere kostnadskontoer, analysiere Hauptbuch, highest increase, størst økning) → Section 23: fetch postings for both periods, top 3 increase, create project+activity for each
 - "Bank reconciliation CSV" (rapprochement, reconcil, avstemme, bankutskrift) → Section 22: parse CSV, match by invoice number, register each payment
 - "Årsoppgjør/årsoppgjer/avskrivinger" → Section 21 (year-end): post depreciation + prepaid reversal + tax
 - "FX/currency invoice payment" (agio, valuta, tipo de cambio, exchange rate) → register payment then POST /ledger/voucher for FX gain/loss (section 6)
@@ -684,8 +713,7 @@ tax = net_result × 0.22
 - "Set fixed price" (fastpris, sett fastpris, precio fijo, Festpreis, prix fixe) → Search project by name → PUT /project/{id} with isFixedPrice:true + fixedprice:<amount> (section 11) ★ Do NOT create orders/invoices ★
 - "Create project for customer" → POST /customer → POST /employee (+ employment) → POST /project
 - "Custom dimension" (dimensjon, Dimension, dimensión, dimension) → POST /ledger/accountingDimensionName + POST /ledger/accountingDimensionValue (section 16)
-- "Supplier/incoming invoice" → Find/create supplier → POST /incomingInvoice?sendTo=ledger (section 17)
-- "Register supplier invoice with VAT" → Find/create supplier → POST /incomingInvoice?sendTo=ledger
+- "Supplier/incoming invoice" → Find/create supplier → Section 17b voucher (NEVER use /incomingInvoice — always 403)
 - "Create X" → POST /X with all fields
 - "Update X" → GET /X?name=Y&fields=id,version,* → PUT /X/{id} with {id, version, fields}
 - "Delete X" → GET /X?...&fields=id → DELETE /X/{id}
@@ -715,7 +743,8 @@ tax = net_result × 0.22
 - Invent field values not mentioned in the task
 - Use "invoiceEmail" when the task says "email"/"e-post"/"epost"/"correo"/"E-Mail" (use the "email" field instead)
 - Use row=0 in voucher postings (must be >= 1)
-- Use nested objects in /incomingInvoice orderLines (use flat IDs: accountId, vatTypeId, NOT account:{id}, vatType:{id})
+- Use /incomingInvoice for ANY supplier/incoming invoice — it always returns 403. Use Section 17b voucher instead
+- Use nested objects in /incomingInvoice orderLines (this endpoint is banned — never call it)
 - Assume resources exist on fresh accounts — always search first, create if not found
 - Query /invoice without invoiceDateFrom AND invoiceDateTo (both are REQUIRED)
 - Use "description", "outstandingAmount", "order", or "balance" in /invoice fields filter (they don't exist on InvoiceDTO — use id, invoiceNumber, amount, amountCurrency instead)

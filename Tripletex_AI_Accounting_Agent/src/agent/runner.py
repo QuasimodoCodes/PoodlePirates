@@ -250,12 +250,23 @@ def _classify_task(prompt: str) -> set:
     # Pure supplier registration — classified separately to avoid invoice pre-flight waste
     if any(w in p_clean for w in ['leverand', 'lieferant', 'fournisseur', 'fornecedor', 'supplier', 'proveedor']):
         cats.add('supplier')
+        # Supplier invoices always need ledger accounts for voucher posting
+        if any(w in p_clean for w in ['invoice', 'faktura', 'factura', 'vat', 'mva', 'rechnung',
+                                       'register', 'book', 'inngående', 'incoming']):
+            cats.add('ledger')
 
     # Bank reconciliation — needs payment+ledger pre-flights
     if any(w in p for w in ['reconcil', 'rapproch', 'avstem', 'bankrekonsil', 'kontoutskrift',
                               'bankutskrift', 'bank statement', 'releve bancaire', 'extracto bancario']):
         cats.add('payment')
         cats.add('ledger')
+
+    # Ledger analysis → project creation (libro mayor / Hauptbuch analysis to identify top accounts)
+    if any(w in p for w in ['libro mayor', 'hauptbuch', 'grand livre', 'general ledger', 'analice el',
+                              'analiz', 'identif', 'størst økning', 'biggest increase', 'mayor increment',
+                              'cuentas de gastos', 'kostnadskon', 'incremento en monto']):
+        cats.add('ledger')
+        cats.add('employee')  # need project manager ID
 
     # Invoice/order/credit tasks (use clean prompt; exclude expense report "abrechnung")
     _has_rechnung = 'rechnung' in p_clean and 'abrechnung' not in p
