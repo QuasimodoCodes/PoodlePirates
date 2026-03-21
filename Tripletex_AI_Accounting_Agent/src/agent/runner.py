@@ -228,6 +228,12 @@ def _execute_tool(name: str, args: dict, client: TripletexClient) -> dict:
             return client.get(args["path"], params=params)
         elif name == "tripletex_post":
             body = args["body"]
+            path = args.get("path", "")
+            # Auto-fix: strip invalid fields from /activity POST
+            if path == "/activity":
+                body.pop("isGeneralActivity", None)
+                body.pop("isProjectActivity", None)
+                body.pop("activityType", None)
             # Auto-fix: dates (e.g. Feb 29 in non-leap year)
             if "date" in body:
                 body["date"] = _fix_date(body["date"])
@@ -237,6 +243,12 @@ def _execute_tool(name: str, args: dict, client: TripletexClient) -> dict:
                     if isinstance(posting, dict) and "amountGrossCurrency" in posting:
                         posting.setdefault("amountGross", posting["amountGrossCurrency"])
                         posting.setdefault("currency", {"id": 1})
+                # Auto-fix: ensure postings sum to 0 (fix rounding on last posting)
+                total = sum(p.get("amountGrossCurrency", 0) for p in body["postings"] if isinstance(p, dict))
+                if total != 0 and len(body["postings"]) >= 2:
+                    last = body["postings"][-1]
+                    last["amountGrossCurrency"] = round(last.get("amountGrossCurrency", 0) - total, 2)
+                    last["amountGross"] = last["amountGrossCurrency"]
             return client.post(args["path"], body=body, params=args.get("params"))
         elif name == "tripletex_put":
             params = args.get("params") or {}

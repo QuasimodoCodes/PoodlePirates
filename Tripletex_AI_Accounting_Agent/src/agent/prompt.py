@@ -535,10 +535,9 @@ Steps:
 2. If project hours: find/create project, ensure activity is linked to project
    POST /project/projectActivity {project:{id}, activity:{id}}
 3. Find activity: GET /activity?name=X&count=5
-   If not found: POST /activity {"name":"X", "isProjectActivity": false, "isGeneralActivity": true}
-   ★ isGeneralActivity: true makes it available for all projects without per-project linking ★
-   ★ If you get 422 "activityType cannot be null" → the activity MUST be created via:
-     POST /project/projectActivity {"project":{"id":<proj_id>}, "activity":{"id":<act_id>}} instead ★
+   If not found: POST /activity {"name":"X"}
+   ★ POST /activity does NOT accept isGeneralActivity or isProjectActivity — just send {"name":"X"} ★
+   ★ After creating, link to project: POST /project/projectActivity {"project":{"id":<proj_id>},"activity":{"id":<act_id>}} ★
 4. POST /timesheet/entry (NOT /timesheet/timeEntry)
 
 Common activities: "Administrasjon", "Ferie", "Fakturerbart arbeid", "Prosjektadministrasjon"
@@ -813,7 +812,7 @@ GET /employee?count=1&fields=id  ← only call ONCE, reuse emp_id for all 3 proj
 
 For account1, then account2, then account3:
   POST /project {"name": "<account_name>", "startDate": "<today>", "projectManager": {"id": <emp_id>}, "isInternal": true}
-  POST /activity {"name": "<account_name>", "isGeneralActivity": false}
+  POST /activity {"name": "<account_name>"}
   POST /project/projectActivity {"project": {"id": <proj_id>}, "activity": {"id": <act_id>}}
 
 ★ Use the ACCOUNT NAME (not number) as both project name and activity name ★
@@ -935,6 +934,7 @@ tax = net_result × 0.22
 - Use "accountingDimension":{"id":X} for dimension values (correct is "dimensionIndex": <integer>)
 - Add "specType", "type", "payslipType" or other invented fields to salary specification objects (valid fields: salaryType, rate, count, amount, description ONLY)
 - Keep retrying the SAME wrong field name on 422 — call tripletex_schema instead to discover correct fields
+- Use "isGeneralActivity", "isProjectActivity", or "activityType" in POST /activity body — these fields DO NOT EXIST; just send {"name":"X"}
 - Post to account 1500 (Kundefordringer) or 2400 (Leverandørgjeld) without including "customer":{"id":X} or "supplier":{"id":X} on the posting — these accounts REQUIRE the linked entity
 - Use "name" in fields filter for OccupationCodeDTO (use "nameNO" or "code") or CurrencyDTO (use "code")
 - Use date 2026-02-29 or other invalid dates — 2026 is NOT a leap year (use Feb 28)
