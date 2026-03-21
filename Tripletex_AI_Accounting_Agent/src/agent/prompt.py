@@ -570,7 +570,48 @@ Always look up account IDs from the [Account IDs: ...] hint — NEVER call GET /
 
 ---
 
-## FILE ATTACHMENTS (PDF/image tasks)
+## 22. BANK RECONCILIATION FROM CSV (bankrekonsiliasjon / rapprochement bancaire / Tier 3)
+When a CSV file is attached and task says "reconcile", "rapprochez", "reconciliar", "avstemme":
+
+### CSV parsing
+Typical format: Dato;Forklaring;Inn;Ut;Saldo  (semicolon-separated)
+- Dato = date (YYYY-MM-DD)
+- Inn = incoming amount (credit to bank, payment FROM customer)
+- Ut = outgoing amount (payment TO supplier, negative)
+- Forklaring = description — ★ ALWAYS extract the INVOICE NUMBER from here ★
+
+### Pattern matching for descriptions:
+- "Innbetaling fra X / Faktura 1001" → incoming, invoice number=1001, customer=X
+- "Betaling fra X / Faktura 1001"    → incoming, invoice number=1001, customer=X
+- "Betaling Fournisseur X / Fakt 5" → outgoing supplier payment, invoice=5 if present
+- "Betaling til X"                   → outgoing supplier payment, no invoice number
+- "Règlement client X / Facture 7"  → incoming, invoice=7
+
+### For each incoming row (Inn has a value):
+★ ALWAYS search by invoice number first — NEVER by customer name ★
+1. GET /invoice?invoiceNumber=<number>&invoiceDateFrom=2020-01-01&invoiceDateTo=2030-12-31&count=1&fields=id,amount,amountCurrency,currency
+2. PUT /invoice/{id}/:payment
+   params: {"paymentDate":"<Dato>","paymentTypeId":<from hint>,"paidAmount":<Inn_amount>}
+   ★ paidAmount = the Inn value from CSV (handles partial payments automatically) ★
+
+### For each outgoing row (Ut has a value):
+If invoice number visible in description:
+  1. GET /ledger/posting?supplier.name=<name>&count=10&fields=id,amount,voucher(id)  — find AP entry
+  OR: GET /invoice?invoiceNumber=<num>&...&count=1 — if supplier invoice registered
+  Then register the payment
+If NO invoice number (just supplier name):
+  → POST /ledger/voucher with 2 postings (date=<Dato>):
+    Row 1: account 2400 (Leverandørgjeld/AP), amount=<Ut_amount> DEBIT  (reduce AP)
+    Row 2: account 1920 (Bank), amount=-<Ut_amount> CREDIT  (money leaves bank)
+    description: description from CSV
+
+### Efficiency rule for bank reconciliation:
+★ Process ONE CSV row per Gemini iteration — do NOT try to call all payments in one response ★
+★ Each row: one GET (find invoice) then one PUT (register payment) — simple sequential flow ★
+★ Never search by customer name — always use invoice number from the description ★
+
+---
+
 If files are attached, extract: amounts, dates, names, account numbers, org numbers.
 Use extracted values directly in API calls — do not ask for clarification.
 
@@ -631,6 +672,7 @@ tax = net_result × 0.22
 5. Do NOT do verification GETs after creating — the POST response contains the id.
 
 ## TASK PATTERNS (match the task to the FIRST pattern that fits)
+- "Bank reconciliation CSV" (rapprochement, reconcil, avstemme, bankutskrift) → Section 22: parse CSV, match by invoice number, register each payment
 - "Årsoppgjør/årsoppgjer/avskrivinger" → Section 21 (year-end): post depreciation + prepaid reversal + tax
 - "FX/currency invoice payment" (agio, valuta, tipo de cambio, exchange rate) → register payment then POST /ledger/voucher for FX gain/loss (section 6)
 - "Create customer" → POST /customer with all fields

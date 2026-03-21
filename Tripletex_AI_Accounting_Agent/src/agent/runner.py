@@ -251,6 +251,12 @@ def _classify_task(prompt: str) -> set:
     if any(w in p_clean for w in ['leverand', 'lieferant', 'fournisseur', 'fornecedor', 'supplier', 'proveedor']):
         cats.add('supplier')
 
+    # Bank reconciliation — needs payment+ledger pre-flights
+    if any(w in p for w in ['reconcil', 'rapproch', 'avstem', 'bankrekonsil', 'kontoutskrift',
+                              'bankutskrift', 'bank statement', 'releve bancaire', 'extracto bancario']):
+        cats.add('payment')
+        cats.add('ledger')
+
     # Invoice/order/credit tasks (use clean prompt; exclude expense report "abrechnung")
     _has_rechnung = 'rechnung' in p_clean and 'abrechnung' not in p
     _invoice_words = ['invoice', 'faktura', 'factura', 'facture', 'order', 'bestilling', 'commande',
@@ -573,8 +579,18 @@ async def run_agent(
 
         # Guard against empty/blocked responses
         if not response.candidates or response.candidates[0].content is None:
-            log.warning("gemini_empty_response", run_id=run_id, iteration=iteration,
-                        finish_reason=response.candidates[0].finish_reason if response.candidates else "no_candidates")
+            finish_reason = str(response.candidates[0].finish_reason) if response.candidates else "no_candidates"
+            log.warning("gemini_empty_response", run_id=run_id, iteration=iteration, finish_reason=finish_reason)
+            # MALFORMED_FUNCTION_CALL → nudge and retry instead of stopping
+            if "MALFORMED" in finish_reason and nudge_count < 3:
+                nudge_count += 1
+                contents.append(types.Content(role="user", parts=[
+                    types.Part.from_text(
+                        text="Your previous function call was malformed and could not be parsed. "
+                             "Please call ONE tool at a time with simple, valid arguments. "
+                             "Continue with the next pending action from the task.")
+                ]))
+                continue
             break
 
         # Add model response to history
