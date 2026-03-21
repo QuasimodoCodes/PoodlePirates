@@ -29,7 +29,9 @@ Paths are relative: "/customer", "/employee", "/invoice" etc.
 - Prices: use floats (27300.0 not "27300").
 - PLAN before calling. Avoid unnecessary GETs. Fix errors in ONE retry.
 - Use ?fields=id,version,name on GET to minimize data transfer.
-- ★ EFFICIENCY: When you need MULTIPLE independent lookups (e.g., customer + employee, or multiple accounts), call them ALL in ONE response as parallel tool calls. Do NOT make sequential single calls. ★
+- ★ EFFICIENCY: When you need MULTIPLE independent lookups OR posts (e.g., customer + employee, or multiple vouchers), call them ALL in ONE response as parallel tool calls. Do NOT make sequential single calls. ★
+- ★ NEVER call /ledger/trialBalance — it does NOT exist (404). Use GET /ledger/posting instead. ★
+- ★ NEVER do verification GETs after creating/posting resources — trust the success response. ★
 - ★ Use pre-discovered Account IDs from the [Account IDs: ...] hint — do NOT call GET /ledger/account for those. ★
 - ★ Use pre-discovered Salary type IDs from the [SALARY TYPE DB IDs] hint — do NOT call GET /salary/type. ★
 - ★ COPY ALL VALUES EXACTLY from the task: organization numbers, phone numbers, amounts, email addresses, names, dates. NEVER invent, round, abbreviate, or guess a value that is explicitly stated in the task. ★
@@ -152,8 +154,16 @@ Required: customer:{id}
 Optional: orderDate, deliveryDate, department:{id}, project:{id}, ourContactEmployee:{id},
   orderLines: [{description, count (float), unitPriceExcludingVatCurrency (float), vatType:{id}, product:{id}}]
 
-For vatType on order lines: use OUTPUT VAT types (id=3 for 25%).
+For vatType on order lines: use OUTPUT VAT types (id=3 for 25%, id=31 for 15%, id=32 for 12%).
 If VAT type is unknown or task doesn't specify, try id=3 first. If 422, try id=0.
+
+★ EFFICIENCY: For multi-product tasks — do NOT look up products one by one. Instead:
+  - If products don't exist: create ALL needed products as parallel POST /product calls in ONE response
+  - Then create the order with orderLines referencing the new product IDs
+  - This avoids 3+ unnecessary GET calls ★
+
+★ orderLines can include product:{id} OR just description + unitPriceExcludingVatCurrency (without product) ★
+★ If task specifies product names+prices, you can put them directly in orderLines WITHOUT creating products first ★
 
 ---
 
@@ -455,9 +465,8 @@ POST /ledger/voucher {"date":"<month_end_date>","description":"Lønnsavsetjing",
 ★ 5000 = Lønn (salary cost, debit) ★
 ★ 2900 = Påløpt lønn / Accrued salary (credit) — get from [Account IDs] hint or GET /ledger/account?number=2900&fields=id ★
 
-### D. Trial balance check (optional, only if task mentions it)
-GET /ledger/trialBalance?dateFrom=<period_start>&dateTo=<period_end>&count=1000&fields=account(number,name),openingBalance,closingBalance
-★ This is just a check — no posting needed if balance is already 0 ★
+★ Post all 3 vouchers (A+B+C) in ONE response with parallel tool calls — no verification GETs needed ★
+★ All amounts and accounts are given in the task — no need to query the ledger ★
 
 ---
 
@@ -603,8 +612,8 @@ When a file is attached (receipt image or PDF) OR task mentions "kvittering"/"ut
 2. Look up or create supplier:
    GET /supplier?organizationNumber=<org>&count=1&fields=id,name
    If not found → POST /supplier {"name":..., "organizationNumber":..., "isSupplier": true}
-3. Find department (if task says "bokfort på avdeling X" / "Abteilung X" / "department X"):
-   GET /department?name=X&count=1&fields=id,name
+3. Find department: use the [All departments: ...] hint to match by name — do NOT call GET /department
+   ★ If task says "department Kundeservice" and hint has "Kundeservice=12345", use id 12345 directly ★
 4. Pick expense account based on item type:
    - Office equipment / furniture / whiteboard / inventar: 6540 (Inventar)
    - Office supplies / stationery / kontorrekvisita: 7000 (Kontorrekvisita)
@@ -659,12 +668,16 @@ Steps:
 2. Find or create supplier:
    GET /supplier?organizationNumber=<org>&count=1&fields=id,name
    If not found → POST /supplier {name, organizationNumber, isSupplier: true}
-3. Pick expense account from [Account IDs] hint based on item/service:
+3. Pick expense account:
+   ★ ALWAYS use the EXACT account number from the task text if one is specified (e.g., "account 6500") ★
+   If no account specified, match by item type from [Account IDs] hint:
    - Office equipment / furniture: 6540
    - Office supplies / stationery: 7000
    - IT equipment / computers: 6540 or 6554
    - Phone / telecom: 7100
    - Consulting / professional services: 6900
+   - Office services (kontortjenester): 6500
+   - Software / licenses (programvare): 6540
    - Other external services: 6800
    - Freight / shipping: 6700
 4. POST /ledger/voucher with exactly 3 postings (sum MUST = 0):
@@ -854,14 +867,21 @@ Amount and accounts as given in task. Date: last day of fiscal year.
   Debit:  8700 (Skattekostnad / tax expense) or nearest per hint
   Credit: 2920 (Betalbar skatt / tax payable) or nearest per hint
 
-If taxable result is not given: GET /ledger/trialBalance?year=<YYYY>&from=0&count=1000&fields=account,openingBalance,closingBalance
-Sum all income accounts (3xxx credit = positive income) minus all cost accounts (4xxx-8xxx debit).
-tax = net_result × 0.22
+★★★ /ledger/trialBalance does NOT exist (returns 404) — use /ledger/posting instead: ★★★
+  GET /ledger/posting?dateFrom=<YYYY>-01-01&dateTo=<YYYY>-12-31&count=1000&fields=account(number),amountGrossCurrency
+  Then group by account number range:
+    Income = sum of postings where account 3000-3999 (these are CREDITS, so negative = income)
+    Costs  = sum of postings where account 4000-8699 (these are DEBITS, so positive = expense)
+    Result = -Income - Costs   (positive = profit, negative = loss)
+    tax = result × 0.22  (only if result > 0)
 
 ### Execution order:
-1. Post ALL depreciation vouchers (one per asset, date=2025-12-31)
+1. Post ALL depreciation vouchers (one per asset, date=2025-12-31) — can be parallel!
 2. Post prepaid/accrual reversals
-3. Post tax entry last (depends on full-year result including depreciation)
+3. GET /ledger/posting to calculate profit (INCLUDES the depreciation/reversals just posted)
+4. Post tax entry last (tax = profit × 0.22)
+
+★ Steps 1 and 2 can be done in ONE response with multiple parallel tool calls ★
 
 ---
 
@@ -943,4 +963,7 @@ tax = net_result × 0.22
 - Post to account 1500 (Kundefordringer) or 2400 (Leverandørgjeld) without including "customer":{"id":X} or "supplier":{"id":X} on the posting — these accounts REQUIRE the linked entity
 - Use "name" in fields filter for OccupationCodeDTO (use "nameNO" or "code") or CurrencyDTO (use "code")
 - Use date 2026-02-29 or other invalid dates — 2026 is NOT a leap year (use Feb 28)
+- Call GET /ledger/trialBalance — this endpoint does NOT exist (returns 404). Use GET /ledger/posting instead
+- Do verification GETs after successful POST/PUT — trust the success response and move on
+- Look up products one by one when creating multi-product orders — batch them: GET /product?name=X&count=5 or create all in one response
 """

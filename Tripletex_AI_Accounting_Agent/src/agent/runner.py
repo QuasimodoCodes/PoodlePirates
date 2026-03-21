@@ -29,7 +29,7 @@ from src.tripletex.client import TripletexClient
 
 log = structlog.get_logger()
 
-MAX_ITERATIONS = 20
+MAX_ITERATIONS = 15
 TIMEOUT_SECONDS = 260
 
 
@@ -448,15 +448,17 @@ async def run_agent(
         except Exception as e:
             log.warning("division_setup_failed", run_id=run_id, error=str(e))
 
-    # Department — only for employee/payroll tasks
-    if need_employee or need_payroll:
+    # Department — for employee/payroll/receipt/ledger tasks (receipts often specify department)
+    if need_employee or need_payroll or need_ledger:
         try:
-            dept_resp = client.get("/department", params={"count": 1, "fields": "id"})
+            dept_resp = client.get("/department", params={"count": 50, "fields": "id,name"})
             dept_values = dept_resp.get("values", [])
             if dept_values:
                 dept_id = dept_values[0]["id"]
                 env_hints.append(f"[Department id: {dept_id} — POST /employee REQUIRES department:{{\"id\":{dept_id}}} on first attempt]")
-                log.info("department_found", run_id=run_id, department_id=dept_id)
+                dept_list = ", ".join(f"{d.get('name','?')}={d['id']}" for d in dept_values)
+                env_hints.append(f"[All departments: {dept_list}]")
+                log.info("department_found", run_id=run_id, department_count=len(dept_values))
         except Exception as e:
             log.warning("department_discovery_failed", run_id=run_id, error=str(e))
 
@@ -509,6 +511,17 @@ async def run_agent(
                 log.info("per_diem_zone_found", run_id=run_id, zone_id=zone_id, zone_name=zone_name)
         except Exception as e:
             log.warning("per_diem_zone_lookup_failed", run_id=run_id, error=str(e))
+
+        # Pre-fetch cost categories so agent doesn't need to GET them
+        try:
+            cc_resp = client.get("/travelExpense/costCategory", params={"showOnTravelExpenses": True, "count": 50, "fields": "id,description"})
+            cc_values = cc_resp.get("values", [])
+            if cc_values:
+                cc_list = ", ".join(f"{c.get('description','?')}={c['id']}" for c in cc_values)
+                env_hints.append(f"[Travel cost categories: {cc_list}]")
+                log.info("travel_cost_categories_found", run_id=run_id, count=len(cc_values))
+        except Exception as e:
+            log.warning("travel_cost_categories_failed", run_id=run_id, error=str(e))
 
     # Account IDs — only for payroll and ledger tasks (NOT for invoice/supplier/credit note)
     if need_payroll or need_ledger:
@@ -652,6 +665,7 @@ async def run_agent(
 
     nudge_count = 0
     has_made_successful_calls = False
+    consecutive_errors = 0
     for iteration in range(MAX_ITERATIONS):
         if time.time() - start > TIMEOUT_SECONDS:
             log.warning("agent_timeout", run_id=run_id, iteration=iteration)
@@ -760,6 +774,26 @@ async def run_agent(
             # Track if any tool call succeeded (no error)
             if "error" not in result:
                 has_made_successful_calls = True
+                consecutive_errors = 0
+            else:
+                consecutive_errors += 1
+
+            # Break early if agent is stuck in an error loop (same error 4+ times)
+            if consecutive_errors >= 4:
+                log.warning("error_loop_break", run_id=run_id, consecutive_errors=consecutive_errors)
+                # Inject a nudge to try a different approach
+                tool_response_parts.append(
+                    types.Part.from_function_response(
+                        name=fc.name,
+                        response={"result": json.dumps({
+                            "error": "STUCK IN LOOP — you have made 4+ consecutive failing calls. "
+                                     "Try a COMPLETELY DIFFERENT approach: use tripletex_schema to discover "
+                                     "correct fields, or skip this step and move to the next part of the task."
+                        })},
+                    )
+                )
+                consecutive_errors = 0
+                break
 
             tool_response_parts.append(
                 types.Part.from_function_response(

@@ -54,6 +54,8 @@ class TripletexClient:
             self._url(path), auth=self._auth, headers=self._headers, json=body, params=params, timeout=20
         )
         resp.raise_for_status()
+        if not resp.content or not resp.content.strip():
+            return {"status": "ok"}
         return resp.json()
 
     @retry(retry=retry_if_exception(_is_retryable), stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=8))
