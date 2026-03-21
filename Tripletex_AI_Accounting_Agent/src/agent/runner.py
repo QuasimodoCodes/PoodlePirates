@@ -499,19 +499,21 @@ async def run_agent(
         response = None
         retry_after_secs = 30  # default backoff
 
+        async def _call_gemini(model: str):
+            """Run synchronous Gemini call in thread pool with 120s timeout."""
+            cfg = types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT, tools=TOOLS)
+            fn = functools.partial(ai.models.generate_content, model=model, contents=contents, config=cfg)
+            return await asyncio.wait_for(asyncio.to_thread(fn), timeout=120)
+
         for model in MODELS:
             try:
-                response = ai.models.generate_content(
-                    model=model,
-                    contents=contents,
-                    config=types.GenerateContentConfig(
-                        system_instruction=SYSTEM_PROMPT,
-                        tools=TOOLS,
-                    ),
-                )
+                response = await _call_gemini(model)
                 if iteration == 0:
                     log.info("using_model", run_id=run_id, model=model)
                 break
+            except asyncio.TimeoutError:
+                log.warning("gemini_timeout", run_id=run_id, model=model)
+                continue  # try next model
             except Exception as e:
                 err = str(e)
                 if "429" in err or "quota" in err.lower() or "rate" in err.lower():
@@ -531,17 +533,10 @@ async def run_agent(
             await asyncio.sleep(wait_time)
             for model in MODELS:
                 try:
-                    response = ai.models.generate_content(
-                        model=model,
-                        contents=contents,
-                        config=types.GenerateContentConfig(
-                            system_instruction=SYSTEM_PROMPT,
-                            tools=TOOLS,
-                        ),
-                    )
+                    response = await _call_gemini(model)
                     log.info("using_model_after_wait", run_id=run_id, model=model)
                     break
-                except Exception:
+                except (asyncio.TimeoutError, Exception):
                     continue
             if response is None:
                 log.error("gemini_failed_all_models", run_id=run_id)
