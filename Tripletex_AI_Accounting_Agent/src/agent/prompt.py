@@ -356,57 +356,86 @@ Search: GET /ledger/accountingDimensionName?count=20&fields=id,dimensionName,dim
 
 ---
 
-## 17. INCOMING / SUPPLIER INVOICE ★ ALWAYS CREATE SUPPLIER FIRST IF NEEDED ★
+## 17. RECEIPT BOOKING (kvittering / utlegg / Tier 3 with file attachment)
+When a file is attached (receipt image or PDF) OR task mentions "kvittering"/"utlegg"/"bokfor":
+
+★ NEVER use /incomingInvoice — competition accounts return 403 (feature disabled) ★
+★ Go directly to POST /ledger/voucher ★
+
+### Flow:
+1. Extract from file: supplier name, org number, total amount (INCL VAT), date, items
+2. Look up or create supplier:
+   GET /supplier?organizationNumber=<org>&count=1&fields=id,name
+   If not found → POST /supplier {"name":..., "organizationNumber":..., "isSupplier": true}
+3. Find department (if task says "bokfort på avdeling X"):
+   GET /department?name=X&count=1&fields=id,name
+4. Pick expense account based on item type:
+   - Office equipment / furniture / whiteboard: 6540 (Inventar)
+   - Office supplies / stationery: 7000 (Kontorrekvisita)
+   - IT equipment / computers: 6554 or 6540
+   - Phone / telecom: 7100
+   - Repairs / maintenance: 6700
+   - Other office costs: 6800
+   ★ Use Account IDs from [Account IDs: ...] hint — do NOT call GET /ledger/account by name ★
+   ★ If account not in hint, look up by number: GET /ledger/account?number=6540&fields=id ★
+
+5. POST /ledger/voucher with exactly 3 postings (sum MUST equal 0):
+
+   ★ CRITICAL VAT MATH — receipt total is INCL. VAT: ★
+     net = total_incl / 1.25          (for 25% standard VAT)
+     vat = total_incl - net           (= total × 0.20)
+     Sum check: net + vat - total = 0 ✓
+
+   Posting 1 (expense debit):   account=<expense_acct_id>,  amount= net,        debit
+   Posting 2 (VAT debit 2710):  account=<2710_id>,           amount= vat,        debit
+   Posting 3 (AP credit 2400):  account=<2400_id>,           amount=-total_incl, credit, supplier:{id:<supplier_id>}
+
+   Add "department": {"id": <dept_id>} to Posting 1 if department was specified.
+
+   Full body example (14420 kr incl. 25% VAT → net=11536, vat=2884):
+   {
+     "date": "YYYY-MM-DD",
+     "description": "Whiteboard from Jernia — HR department",
+     "postings": [
+       {"row": 1, "account": {"id": <6540_id>}, "amountGrossCurrency": 11536, "description": "Whiteboard",
+        "department": {"id": <dept_id>}},
+       {"row": 2, "account": {"id": <2710_id>}, "amountGrossCurrency": 2884, "description": "Inngående MVA 25%"},
+       {"row": 3, "account": {"id": <2400_id>}, "amountGrossCurrency": -14420, "description": "Leverandørgjeld",
+        "supplier": {"id": <supplier_id>}}
+     ]
+   }
+
+---
+
+## 17b. INCOMING / SUPPLIER INVOICE (non-receipt, e.g. "register this supplier invoice")
 Steps:
 1. Search supplier: GET /supplier?organizationNumber=X&count=5&fields=id,name
    - If not found → POST /supplier {name, organizationNumber, isSupplier: true}
 2. Find expense account: GET /ledger/account?number=XXXX&fields=id,number,name
-3. Create the supplier invoice:
-
-POST /incomingInvoice?sendTo=ledger
-Body: {
-  "invoiceHeader": {
-    "vendorId": <supplier_id_integer>,
-    "invoiceDate": "YYYY-MM-DD",
-    "dueDate": "YYYY-MM-DD",
-    "currencyId": 1,
-    "invoiceAmount": <total_including_vat>,
-    "invoiceNumber": "INV-xxx",
-    "description": "..."
-  },
-  "orderLines": [
-    {
-      "externalId": "line-1",
-      "row": 1,
-      "description": "...",
-      "accountId": <expense_account_id_integer>,
-      "amountInclVat": <total_including_vat>,
-      "vatTypeId": <vat_type_id_integer>,
-      "count": 1
-    }
-  ]
-}
-
-★ CRITICAL: orderLine fields are FLAT integers, NOT nested objects ★
-  - Use "accountId": 12345   NOT "account": {"id": 12345}
-  - Use "vatTypeId": 1       NOT "vatType": {"id": 1}
-  - Use "amountInclVat": 75500  NOT "unitPriceExcludingVat": 60400
-  - "externalId" is REQUIRED — use "line-1", "line-2" etc.
-
-★ CRITICAL: Use query param sendTo=ledger to post directly to the ledger ★
-  params={"sendTo": "ledger"}
-
-VAT types for incoming/supplier invoices (INPUT VAT):
-  25% standard: vatTypeId=1  |  15% food: vatTypeId=11  |  12% transport: vatTypeId=12  |  0%: vatTypeId=0
-
-If POST /incomingInvoice fails with 403 or 422, fall back to voucher approach:
-  ★ Use pre-discovered Account IDs from [Account IDs: ...] hint — do NOT call GET for these ★
-  POST /ledger/voucher with postings:
-    Row 1: expense account (debit, net amount)
-    Row 2: account 2710 (input VAT 25%, debit, vat amount)
-    Row 3: account 2400 (accounts payable, credit = -total, with supplier:{id})
-  Look up account IDs by number: GET /ledger/account?number=2710&fields=id
-  Net = total / 1.25, VAT = total - net
+3. POST /incomingInvoice?sendTo=ledger
+   Body: {
+     "invoiceHeader": {
+       "vendorId": <supplier_id_integer>,
+       "invoiceDate": "YYYY-MM-DD",
+       "dueDate": "YYYY-MM-DD",
+       "currencyId": 1,
+       "invoiceAmount": <total_including_vat>,
+       "invoiceNumber": "INV-xxx",
+       "description": "..."
+     },
+     "orderLines": [
+       {
+         "externalId": "line-1",
+         "row": 1,
+         "description": "...",
+         "accountId": <expense_account_id_integer>,
+         "amountInclVat": <total_including_vat>,
+         "vatTypeId": <vat_type_id_integer>,
+         "count": 1
+       }
+     ]
+   }
+   ★ CRITICAL: If 403 → DO NOT RETRY — immediately use POST /ledger/voucher (same as Section 17 above) ★
 
 ---
 

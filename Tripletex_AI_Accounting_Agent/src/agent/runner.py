@@ -270,7 +270,9 @@ def _classify_task(prompt: str) -> set:
                              'funcionário', 'funcionária', 'novo funcionário', 'nova funcionária']):
         cats.add('employee')
 
-    if any(w in p for w in ['voucher', 'bilag', 'journal', 'konter', 'dimensi', 'dimension']):
+    if any(w in p for w in ['voucher', 'bilag', 'journal', 'konter', 'dimensi', 'dimension',
+                             'kvittering', 'bokfor', 'utlegg', 'receipt', 'bilagsforing',
+                             'kontering', 'refusjon', 'reimburs', 'expense report']):
         cats.add('ledger')
 
     return cats
@@ -290,6 +292,9 @@ async def run_agent(
 
     # Classify task — only run needed pre-flights to preserve API call budget
     cats = _classify_task(prompt)
+    # Files attached (Tier 3) → always need accounts for voucher posting
+    if files:
+        cats.add('ledger')
     need_payroll = 'payroll' in cats
     need_travel = 'travel' in cats
     need_invoice = 'invoice' in cats
@@ -391,7 +396,8 @@ async def run_agent(
         try:
             all_accts = client.get("/ledger/account", params={"count": 1000, "fields": "id,number", "from": 0})
             acct_map = {a["number"]: a["id"] for a in all_accts.get("values", [])}
-            needed = [1920, 2400, 2600, 2710, 2770, 2780, 3000, 5000, 7000, 7100, 7140]
+            needed = [1920, 2400, 2600, 2710, 2770, 2780, 3000, 5000,
+                      6540, 6700, 6800, 6900, 7000, 7100, 7140]
             found = {n: acct_map[n] for n in needed if n in acct_map}
             if found:
                 acct_hints = " | ".join(f"{n}={aid}" for n, aid in sorted(found.items()))
