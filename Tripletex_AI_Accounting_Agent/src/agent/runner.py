@@ -312,8 +312,9 @@ def _classify_task(prompt: str) -> set:
 
     cats = set()
 
-    if any(w in p for w in ['salary', 'lønn', 'lön', 'lönn', 'salaire', 'nomina', 'payroll', 'wage', 'gehalt', 'payslip',
-                             'salario', 'salário']):
+    if any(w in p for w in ['salary', 'lønn', 'løn', 'lön', 'lönn', 'salaire', 'nomina', 'payroll', 'wage', 'gehalt', 'payslip',
+                             'salario', 'salário', 'grunnløn', 'grunnlön', 'eingongsbonus', 'bonus',
+                             'køyr løn', 'kjør lønn', 'kör lön']):
         cats.add('payroll')
 
     if any(w in p for w in ['travel', 'reise', 'voyage', 'viaje', 'dienstreise', 'reisregning', 'reisrekn', 'diett', 'dietas', 'frais de d', 'nota de gastos', 'indemnit',
@@ -328,12 +329,14 @@ def _classify_task(prompt: str) -> set:
                                        'register', 'book', 'inngående', 'incoming']):
             cats.add('ledger')
 
-    # Bank reconciliation — needs payment+ledger pre-flights
+    # Bank reconciliation — needs payment+ledger+invoice+supplier pre-flights
     if any(w in p for w in ['reconcil', 'rapproch', 'avstem', 'bankrekonsil', 'kontoutskrift',
                               'bankutskrift', 'bank statement', 'releve bancaire', 'extracto bancario',
-                              'extrato bancario']):
+                              'extrato bancario', 'concilia']):
         cats.add('payment')
         cats.add('ledger')
+        cats.add('invoice')
+        cats.add('supplier')
 
     # Ledger analysis → project creation (libro mayor / Hauptbuch analysis to identify top accounts)
     if any(w in p for w in ['libro mayor', 'hauptbuch', 'grand livre', 'general ledger', 'livro razão',

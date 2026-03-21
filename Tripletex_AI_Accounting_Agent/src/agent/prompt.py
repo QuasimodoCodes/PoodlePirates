@@ -235,15 +235,23 @@ When an invoice was issued in a foreign currency at one rate, but payment arrive
 
   Step 1: Find EXISTING invoice for this customer:
     GET /invoice?customerId=<id>&invoiceDateFrom=2020-01-01&invoiceDateTo=2030-12-31&count=10&fields=id,invoiceNumber,amount,amountCurrency,currency(id,code)
-    ★ The task says "we sent an invoice" — it SHOULD already exist. Look at ALL invoices for the customer. ★
-    ★ If invoice currency is EUR, amount/amountCurrency may be in EUR. Match by customer, not by NOK amount. ★
-    ★ If NO invoice found: You must create order+invoice at the ORIGINAL rate (nok_at_invoice) ★
+    ★ The task says "we sent an invoice" — it SHOULD already exist. Use the FIRST/ONLY invoice for this customer. ★
+    ★ The existing invoice amount (in NOK) = the nok_at_invoice amount. Use THIS for FX calculation. ★
+    ★ DO NOT create a new order/invoice if one already exists for the customer! ★
+    ★ If customer has exactly 1 invoice, that IS the FX invoice — use it directly. ★
+    ★ If NO invoice found: Create order+invoice in NOK at original rate. Order unitPriceExcludingVatCurrency = nok_at_invoice / 1.25, vatType:{id:3} ★
 
   Step 2: Register payment at the NEW exchange rate (actual NOK received):
+    ★ nok_at_payment = foreign_amount × payment_rate (calculate step by step!) ★
     PUT /invoice/{id}/:payment  params={"paymentDate":"YYYY-MM-DD","paymentTypeId":<hint>,"paidAmount":<nok_at_payment>,"paidAmountCurrency":<nok_at_payment>}
     ★ This leaves the invoice partially unpaid by the FX difference amount ★
 
-  Step 3: Post FX gain/loss as separate voucher (date = payment date):
+  Step 3: Calculate FX difference USING THE INVOICE AMOUNT from step 1:
+    ★ fx_diff = nok_at_payment − invoice_amount (from the GET response in step 1) ★
+    ★ Do NOT recalculate nok_at_invoice — use the actual invoice.amount from Tripletex ★
+
+  Step 4: Post FX gain/loss as separate voucher (date = payment date):
+    ★ fx_diff = nok_at_payment − invoice.amount (from Tripletex, NOT recalculated) ★
     POST /ledger/voucher  body:
       If fx_diff > 0 (GAIN — customer paid MORE in NOK than invoiced):
         {"date": "YYYY-MM-DD", "description": "Valutagevinst <CURRENCY>/NOK",
@@ -431,12 +439,17 @@ POST /ledger/voucher {"date":"<error_date>","description":"Korrektur: dobbel bil
 ★ Match the EXACT postings of the duplicate — look at what accounts the duplicate voucher touched ★
 
 **C. Missing VAT line (expense posted without VAT split):**
+The task says VAT (MVA) was not recorded. "beløp ekskl." means the expense amount is correct (net), but input VAT is missing.
+★ Look at the ORIGINAL posting to find what account was credited (bank 1920 or AP 2400) ★
 POST /ledger/voucher {"date":"<error_date>","description":"Korrektur: manglende MVA",
   "postings":[
-    {"row":1,"account":{"id":<expense_acct_id>},"amountGrossCurrency":-<vat_amount>},  ← reduce expense by VAT
-    {"row":2,"account":{"id":<2710_id>},"amountGrossCurrency":<vat_amount>}             ← add input VAT
+    {"row":1,"account":{"id":<2710_id>},"amountGrossCurrency":<vat_amount>},              ← add missing input VAT
+    {"row":2,"account":{"id":<original_credit_acct_id>},"amountGrossCurrency":-<vat_amount>}  ← offset against same account as original
   ]}
-★ VAT = gross_amount × 0.25 / 1.25 (if 25% VAT was missing) ★
+★ VAT = excl_amount × 0.25 (e.g., 11050 × 0.25 = 2762.50) ★
+★★★ If offset account is 2400 (AP): you MUST include supplier reference from the original posting ★★★
+★★★ If offset account is 1500 (AR): you MUST include customer reference from the original posting ★★★
+Example: {"row":2,"account":{"id":<2400_id>},"amountGrossCurrency":-2762.50, "supplier":{"id":<from_original>}}
 
 **D. Wrong amount (e.g., 15200 posted instead of 13400):**
 POST /ledger/voucher {"date":"<error_date>","description":"Korrektur: feil beløp",
@@ -979,6 +992,8 @@ Amount and accounts as given in task. Date: last day of fiscal year.
 - Invent field values not mentioned in the task
 - Use "invoiceEmail" when the task says "email"/"e-post"/"epost"/"correo"/"E-Mail" (use the "email" field instead)
 - Use row=0 in voucher postings (must be >= 1)
+- Post on account 2400 (Leverandørgjeld/AP) without supplier:{"id":<id>} — causes "Leverandør mangler" 422
+- Post on account 1500 (Kundefordringer/AR) without customer:{"id":<id>} — causes "Kunde mangler" 422
 - Use /incomingInvoice for ANY supplier/incoming invoice — it always returns 403. Use Section 17b voucher instead
 - Use nested objects in /incomingInvoice orderLines (this endpoint is banned — never call it)
 - Assume resources exist on fresh accounts — always search first, create if not found
