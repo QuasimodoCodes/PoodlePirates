@@ -286,7 +286,9 @@ def _classify_task(prompt: str) -> set:
 
     if any(w in p for w in ['employee', 'ansatt', 'mitarbeiter', 'employ', 'empleado', 'medarbeider', 'ny ansatt', 'nouvel employ', 'nuevo empleado', 'neuen mitarbeiter', 'ansette',
                              'funcionario', 'funcionária', 'novo funcionario', 'nova funcionaria',
-                             'funcionário', 'funcionária', 'novo funcionário', 'nova funcionária']):
+                             'funcionário', 'funcionária', 'novo funcionário', 'nova funcionária',
+                             'tilsett', 'tilsette', 'ny tilsett', 'medarbeidar', 'onboarding',
+                             'tilbodsbrev', 'tilbudsbrev', 'arbeidskontrakt', 'contrato de trabalho']):
         cats.add('employee')
 
     if any(w in p for w in ['voucher', 'bilag', 'journal', 'konter', 'dimensi', 'dimension',
@@ -485,8 +487,32 @@ async def run_agent(
         text_content = f.get("text", "")
         fname = f.get("filename", f.get("name", "file"))
 
+        # Auto-detect MIME type from filename extension when not provided
+        if not mime:
+            fl = fname.lower()
+            if fl.endswith(".pdf"):
+                mime = "application/pdf"
+            elif fl.endswith(".csv"):
+                mime = "text/csv"
+            elif fl.endswith(".png"):
+                mime = "image/png"
+            elif fl.endswith((".jpg", ".jpeg")):
+                mime = "image/jpeg"
+
         if b64_data:
             raw_bytes = base64.b64decode(b64_data)
+
+            # Fallback: detect by magic bytes / content when extension gives no clue
+            if not mime:
+                if raw_bytes[:4] == b"%PDF":
+                    mime = "application/pdf"
+                else:
+                    try:
+                        sample = raw_bytes[:512].decode("utf-8")
+                        if ";" in sample or "," in sample:
+                            mime = "text/csv"
+                    except UnicodeDecodeError:
+                        pass
 
             if mime == "application/pdf":
                 # Extract text from PDF pages
