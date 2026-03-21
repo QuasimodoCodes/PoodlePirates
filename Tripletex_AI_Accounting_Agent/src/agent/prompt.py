@@ -51,20 +51,59 @@ No VAT: id=0
 
 ---
 
-## 1. EMPLOYEE ★ TWO-STEP PROCESS — always POST employee THEN POST employment ★
+## 1. EMPLOYEE ★ THREE-STEP PROCESS — always POST employee THEN employment THEN details ★
 Step 1: POST /employee
 Body MUST include ALL of these:
-  {"firstName": "X", "lastName": "Y", "email": "x@y.no", "userType": "STANDARD", "dateOfBirth": "1990-01-15", "department": {"id": DEPT_ID}}
+  {"firstName": "X", "lastName": "Y", "email": "x@y.no", "userType": "STANDARD",
+   "dateOfBirth": "YYYY-MM-DD", "department": {"id": DEPT_ID}}
+Optional (include if in task/PDF):
+  "nationalIdentityNumber": "<ssn_or_national_id>"  ← ★ ALWAYS include if PDF has ID/CPF/NIF/personnummer ★
 - department: ALWAYS include on the FIRST attempt using DEPT_ID from [Department id: X] hint
 - email: use the EXACT email from the task
 - userType: "STANDARD" unless task says administrator/kontoadministrator/administrador/Kontoadministrator/administrateur/Administrador/account administrator → use "ADMINISTRATOR"
 - dateOfBirth: use value from task, or default "1990-01-15" if not specified
+- nationalIdentityNumber: extract from contract/PDF — look for: personnummer, NIF, CPF, ID-nummer, Personnummer, national ID, número de identidade, número de identificación
 - If POST fails with userType error (422) → retry with "userType": "STANDARD" instead
 
 Step 2: POST /employee/employment  ★ ALWAYS DO THIS — NEVER SKIP ★
-Body: {"employee": {"id": <emp_id>}, "startDate": "YYYY-MM-DD", "isMainEmployer": true, "division": {"id": DIV_ID}}
-- division: ALWAYS include on the FIRST attempt using DIV_ID from [Division id: X] hint
-- startDate: use value from task, or today's date if not specified
+Body:
+  {"employee": {"id": <emp_id>},
+   "startDate": "YYYY-MM-DD",
+   "isMainEmployer": true,
+   "division": {"id": DIV_ID},
+   "employmentDetails": [
+     {"date": "YYYY-MM-DD",
+      "employmentType": "ORDINARY",
+      "employmentForm": "PERMANENT",
+      "remunerationType": "MONTHLY_WAGE",
+      "workingHoursScheme": "NOT_SHIFT",
+      "percentageOfFullTimeEquivalent": <percent>,
+      "annualSalary": <yearly_gross>,
+      "occupationCode": {"id": <occ_id>}
+     }
+   ]
+  }
+★ percentageOfFullTimeEquivalent: extract from task/PDF (e.g., 80.0 for 80%, 100.0 for full-time) ★
+★ annualSalary: extract yearly salary figure from task/PDF ★
+★ workingHoursScheme: "NOT_SHIFT" for standard day work (default); "ROUND_THE_CLOCK" for 24/7 ★
+★ occupationCode: if PDF has an occupation/STYRK/ISCO code, look it up first:
+   GET /employee/employment/occupationCode?name=<job_title>&count=3&fields=id,name,code
+   Use returned id in {"id": <occ_id>}. If not found, omit occupationCode entirely. ★
+★ If employmentDetails causes 422 → post employment WITHOUT employmentDetails, then add details separately:
+   POST /employee/employment/details {"employment":{"id":<emp_id>},"date":"YYYY-MM-DD","employmentType":"ORDINARY","remunerationType":"MONTHLY_WAGE","workingHoursScheme":"NOT_SHIFT","percentageOfFullTimeEquivalent":<pct>,"annualSalary":<salary>} ★
+
+★ When extracting from PDF/offer letter, look for: ★
+  - firstName, lastName → name fields
+  - email → email field
+  - fødselsdato / date of birth / nacimiento / data de nascimento → dateOfBirth
+  - personnummer / NIF / CPF / ID-nummer → nationalIdentityNumber
+  - startdato / start date / fecha de inicio / data de início → startDate
+  - prosent / porcentaje / porcentagem / % stilling → percentageOfFullTimeEquivalent
+  - årslønn / annual salary / salario anual / salário anual → annualSalary
+  - stillingskode / occupation code / código de ocupación / código de ocupação → lookup occupationCode
+  - avdeling / department / departamento / departamento → match to [Department id: X] hint
+  - standard arbeidstid / horas de trabajo / horas de trabalho → workingHoursScheme (use "NOT_SHIFT")
+
 - If employment fails with "dateOfBirth" error → PUT /employee/{id} to add dateOfBirth, then retry
 - This step is MANDATORY. The employee is incomplete without it. Always do it immediately after Step 1.
 
@@ -158,6 +197,30 @@ Register payment:
     2. PUT /invoice/{id}/:payment with paidAmount=NEGATIVE (e.g., -36875.0)
        params={"paymentDate":"YYYY-MM-DD", "paymentTypeId": <from env hint>, "paidAmount": -36875.0}
   This reverses the original payment. Do NOT use :createCreditNote for bounced payments.
+
+★ FOREIGN CURRENCY INVOICE PAYMENT + FX DIFFERENCE (agio/valutagevinst) ★
+When an invoice was issued in a foreign currency at one rate, but payment arrives at a different rate:
+  - invoice_amount_foreign = e.g. 5230 EUR
+  - original_rate = e.g. 11.95 NOK/EUR
+  - payment_rate  = e.g. 12.20 NOK/EUR
+  - nok_at_invoice = 5230 × 11.95 = 62503.50 NOK
+  - nok_at_payment = 5230 × 12.20 = 63806.00 NOK
+  - fx_gain = nok_at_payment − nok_at_invoice = 1302.50 NOK  (positive = gain, negative = loss)
+
+  Step 1: GET /invoice with invoiceDateFrom/To → find invoice; note its NOK amount
+  Step 2: Register payment (use actual NOK received):
+    PUT /invoice/{id}/:payment  params={"paymentDate":"YYYY-MM-DD","paymentTypeId":<hint>,"paidAmount":63806.0}
+  Step 3: Post FX gain as separate voucher (date = payment date):
+    POST /ledger/voucher  body:
+      {"date": "YYYY-MM-DD", "description": "Valutagevinst EUR/NOK",
+       "postings": [
+         {"row":1, "account":{"id":<1500_id>}, "amountGrossCurrency":-1302.50, "currency":{"id":1}},
+         {"row":2, "account":{"id":<8060_id>}, "amountGrossCurrency": 1302.50, "currency":{"id":1}}
+       ]}
+  ★ Account 8060 = Valutagevinst (currency gain); 8071 = Valutatap (currency loss) ★
+  ★ If fx_gain < 0 (loss): flip signs — debit 8071, credit 1500 ★
+  ★ Use [Account IDs] or [Missing task accounts] hints for account 8060/1500 IDs ★
+  ★ 1500 = Kundefordringer (accounts receivable) ★
 
 ---
 
@@ -569,6 +632,7 @@ tax = net_result × 0.22
 
 ## TASK PATTERNS (match the task to the FIRST pattern that fits)
 - "Årsoppgjør/årsoppgjer/avskrivinger" → Section 21 (year-end): post depreciation + prepaid reversal + tax
+- "FX/currency invoice payment" (agio, valuta, tipo de cambio, exchange rate) → register payment then POST /ledger/voucher for FX gain/loss (section 6)
 - "Create customer" → POST /customer with all fields
 - "Create invoice for customer" → POST /customer (if needed) → POST /order (with orderLines + deliveryDate) → POST /invoice
 - "Register payment" → GET /invoice (with invoiceDateFrom/To) → PUT /invoice/{id}/:payment (query params!)
@@ -588,6 +652,9 @@ tax = net_result × 0.22
 - Skip depreciation steps if a specified account isn't found (use nearest per [Missing task accounts] hint)
 - Stop after fewer steps than the task requires on multi-step year-end tasks (complete ALL steps)
 - Call GET /ledger/account by NAME (returns wrong results — always use number or the pre-built hints)
+- Omit nationalIdentityNumber when PDF/contract contains a national ID, personnummer, NIF, or CPF
+- Omit employmentDetails (percentageOfFullTimeEquivalent, annualSalary) from POST /employee/employment when PDF specifies them
+- Skip the FX gain/loss voucher when registering payment on a foreign-currency invoice at a different rate
 - Use a single debit/credit voucher for payroll (must include tax withholding at minimum)
 - Use POST for invoice payment (it's PUT /invoice/{id}/:payment with query params)
 - Use POST for credit note (it's PUT /invoice/{id}/:createCreditNote with query params)

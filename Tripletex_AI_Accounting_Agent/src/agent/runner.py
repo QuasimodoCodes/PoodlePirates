@@ -262,7 +262,9 @@ def _classify_task(prompt: str) -> set:
 
     # Payment registration — controls bank account + paymentType pre-flights
     if any(w in p_clean for w in ['payment', 'betaling', 'pago', 'zahlung', 'paiement', 'pagamento',
-                                   'bounced', 'retur', 'avvist', 'returned', 'registrer betal']):
+                                   'bounced', 'retur', 'avvist', 'returned', 'registrer betal',
+                                   'agio', 'valuta', 'exchange rate', 'tipo de cambio', 'tipo de câmbio',
+                                   'currency', 'kurs', 'wechselkurs']):
         cats.add('payment')
 
     if any(w in p for w in ['employee', 'ansatt', 'mitarbeiter', 'employ', 'empleado', 'medarbeider', 'ny ansatt', 'nouvel employ', 'nuevo empleado', 'neuen mitarbeiter', 'ansette',
@@ -275,7 +277,8 @@ def _classify_task(prompt: str) -> set:
                              'kontering', 'refusjon', 'reimburs', 'expense report',
                              'avskriv', 'årsoppgjer', 'årsoppgjør', 'depreciation',
                              'skattekostnad', 'periodisering', 'abschluss', 'year-end',
-                             'forskotsbetalt', 'prepaid', 'accrual']):
+                             'forskotsbetalt', 'prepaid', 'accrual',
+                             'agio', 'valutagevinst', 'valutatap', 'exchange rate', 'tipo de cambio']):
         cats.add('ledger')
 
     return cats
@@ -399,8 +402,8 @@ async def run_agent(
         try:
             all_accts = client.get("/ledger/account", params={"count": 1000, "fields": "id,number", "from": 0})
             acct_map = {a["number"]: a["id"] for a in all_accts.get("values", [])}
-            needed = [1920, 2400, 2600, 2710, 2770, 2780, 3000, 5000,
-                      6540, 6700, 6800, 6900, 7000, 7100, 7140]
+            needed = [1500, 1920, 2400, 2600, 2710, 2770, 2780, 3000, 5000,
+                      6540, 6700, 6800, 6900, 7000, 7100, 7140, 8060, 8071]
 
             # Also pull any 4-digit account numbers the task explicitly mentions
             task_acct_nums = set(int(m) for m in _re.findall(r'\b([1-9]\d{3})\b', prompt)
