@@ -139,6 +139,11 @@ Optional: number, priceExcludingVatCurrency (float), priceIncludingVatCurrency (
   costExcludingVatCurrency (float), vatType:{id}, productUnit:{id},
   account:{id}, department:{id}, supplier:{id}, description
 
+★ CRITICAL: When task says "Product X (1234)", the number 1234 is the PRODUCT CATALOG NUMBER, NOT the database ID ★
+★ To use existing products in orders: GET /product?number=1234&count=1&fields=id,name,number → use the returned "id" ★
+★ If product not found, create it: POST /product {"name":"X", "number":"1234", "priceExcludingVatCurrency": <price>} ★
+★ If product creation fails with "already registered" → GET /product?name=<name>&count=1&fields=id to find it ★
+
 For VAT on products: use the hardcoded VAT IDs (see top of prompt).
 - Task says standard/25%: vatType:{id:3}
 - Task says food/15%/næringsmidler/Lebensmittel/alimentaire/alimentos: vatType:{id:31}
@@ -327,7 +332,7 @@ Then: POST /employee/employment {employee:{id},startDate:"2020-01-01",isMainEmpl
 POST /project {"name":"<name>","startDate":"<today>","projectManager":{"id":<pm_id>},"customer":{"id":<cust_id>},"isFixedPrice":true,"fixedprice":<budget_amount>}
 
 ### Step 5: Create activity + link to project
-POST /activity {"name":"Prosjektarbeid", "activityType":"GENERAL_ACTIVITY"}  (or use task-specified activity name)
+POST /activity {"name":"Prosjektarbeid", "activityType":"PROJECT_GENERAL_ACTIVITY"}  (or use task-specified activity name)
 POST /project/projectActivity {"project":{"id":<proj_id>},"activity":{"id":<act_id>}}
 
 ### Step 6: Register timesheet hours for each employee
@@ -548,8 +553,8 @@ Steps:
 2. If project hours: find/create project, ensure activity is linked to project
    POST /project/projectActivity {project:{id}, activity:{id}}
 3. Find activity: GET /activity?name=X&count=5
-   If not found: POST /activity {"name":"X", "activityType":"GENERAL_ACTIVITY"}
-   ★ activityType is REQUIRED — valid values: GENERAL_ACTIVITY, PROJECT_GENERAL_ACTIVITY, TASK ★
+   If not found: POST /activity {"name":"X", "activityType":"PROJECT_GENERAL_ACTIVITY"}
+   ★ activityType is REQUIRED — use PROJECT_GENERAL_ACTIVITY for project-linked activities, GENERAL_ACTIVITY for standalone ★
    ★ Do NOT use isGeneralActivity or isProjectActivity — those fields don't exist ★
    ★ After creating, link to project: POST /project/projectActivity {"project":{"id":<proj_id>},"activity":{"id":<act_id>}} ★
 4. POST /timesheet/entry (NOT /timesheet/timeEntry)
@@ -830,7 +835,7 @@ GET /employee?count=1&fields=id  ← only call ONCE, reuse emp_id for all 3 proj
 
 For account1, then account2, then account3:
   POST /project {"name": "<account_name>", "startDate": "<today>", "projectManager": {"id": <emp_id>}, "isInternal": true}
-  POST /activity {"name": "<account_name>", "activityType": "GENERAL_ACTIVITY"}
+  POST /activity {"name": "<account_name>", "activityType": "PROJECT_GENERAL_ACTIVITY"}
   POST /project/projectActivity {"project": {"id": <proj_id>}, "activity": {"id": <act_id>}}
 
 ★ Use the ACCOUNT NAME (not number) as both project name and activity name ★
@@ -959,7 +964,7 @@ Amount and accounts as given in task. Date: last day of fiscal year.
 - Use "accountingDimension":{"id":X} for dimension values (correct is "dimensionIndex": <integer>)
 - Add "specType", "type", "payslipType" or other invented fields to salary specification objects (valid fields: salaryType, rate, count, amount, description ONLY)
 - Keep retrying the SAME wrong field name on 422 — call tripletex_schema instead to discover correct fields
-- Use "isGeneralActivity", "isProjectActivity" in POST /activity body — these fields DO NOT EXIST; use "activityType":"GENERAL_ACTIVITY" instead
+- Use "isGeneralActivity", "isProjectActivity" in POST /activity body — these fields DO NOT EXIST; use "activityType":"PROJECT_GENERAL_ACTIVITY" instead
 - Post to account 1500 (Kundefordringer) or 2400 (Leverandørgjeld) without including "customer":{"id":X} or "supplier":{"id":X} on the posting — these accounts REQUIRE the linked entity
 - Use "name" in fields filter for OccupationCodeDTO (use "nameNO" or "code") or CurrencyDTO (use "code")
 - Use date 2026-02-29 or other invalid dates — 2026 is NOT a leap year (use Feb 28)

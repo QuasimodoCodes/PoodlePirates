@@ -233,7 +233,7 @@ def _execute_tool(name: str, args: dict, client: TripletexClient) -> dict:
             if path == "/activity":
                 body.pop("isGeneralActivity", None)
                 body.pop("isProjectActivity", None)
-                body.setdefault("activityType", "GENERAL_ACTIVITY")
+                body.setdefault("activityType", "PROJECT_GENERAL_ACTIVITY")
             # Auto-fix: dates (e.g. Feb 29 in non-leap year)
             if "date" in body:
                 body["date"] = _fix_date(body["date"])
@@ -249,6 +249,21 @@ def _execute_tool(name: str, args: dict, client: TripletexClient) -> dict:
                     last = body["postings"][-1]
                     last["amountGrossCurrency"] = round(last.get("amountGrossCurrency", 0) - total, 2)
                     last["amountGross"] = last["amountGrossCurrency"]
+            # Auto-fix: for employee employment, ensure dateOfBirth is set first
+            if path == "/employee/employment" and "employee" in body:
+                emp_id = body["employee"].get("id")
+                if emp_id:
+                    try:
+                        emp_resp = client.get("/employee/" + str(emp_id), params={"fields": "id,version,dateOfBirth"})
+                        emp_data = emp_resp.get("value", emp_resp)
+                        if not emp_data.get("dateOfBirth"):
+                            client.put(f"/employee/{emp_id}", body={
+                                "id": emp_id, "version": emp_data.get("version", 1),
+                                "dateOfBirth": "1990-01-15"
+                            })
+                            log.info("auto_set_dateOfBirth", employee_id=emp_id)
+                    except Exception:
+                        pass  # best-effort, don't block
             return client.post(args["path"], body=body, params=args.get("params"))
         elif name == "tripletex_put":
             params = args.get("params") or {}
@@ -392,7 +407,20 @@ def _classify_task(prompt: str) -> set:
                              'korrektur', 'korriger', 'correction', 'feil i bilag',
                              'quittung', 'reçu', 'recibo', 'ausgabe', 'beleg',
                              'purregebyr', 'purring', 'reminder fee', 'mahnung',
-                             'forfalt', 'forfallen', 'overdue', 'uteståande', 'utestående']):
+                             'forfalt', 'forfallen', 'overdue', 'uteståande', 'utestående',
+                             # French
+                             'amortissement', 'cloture', 'clôture', 'exercice', 'comptabilis',
+                             'impôt', 'impot', 'charge constat', 'ecriture', 'écriture',
+                             'rapprochement', 'grand livre', 'mensuel',
+                             # Portuguese
+                             'depreciação', 'depreciaçao', 'encerramento', 'imposto',
+                             'provisão', 'provisao', 'lançamento', 'lancamento',
+                             # Spanish
+                             'depreciación', 'depreciacion', 'cierre', 'asiento',
+                             'provisión', 'provision', 'amortización', 'amortizacion',
+                             # German
+                             'abschreibung', 'jahresabschluss', 'monatsabschluss', 'buchung',
+                             'steuer', 'rückstellung', 'ruckstellung']):
         cats.add('ledger')
 
     return cats
