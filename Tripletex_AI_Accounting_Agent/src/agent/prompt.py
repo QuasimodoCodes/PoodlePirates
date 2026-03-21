@@ -263,7 +263,7 @@ Optional: departmentNumber, departmentManager:{id}
 ## 11. PROJECT
 POST /project
 Required: name, startDate (YYYY-MM-DD), projectManager:{id}
-Optional: customer:{id}, endDate, description, department:{id}, isFixedPrice (bool), fixedprice (number)
+Optional: customer:{id}, endDate, description, department:{id}, isFixedPrice (bool), fixedprice (number), isInternal (bool)
 
 Steps:
 1. If customer mentioned → search first: GET /customer?organizationNumber=X, create only if not found
@@ -288,6 +288,170 @@ When the task says to set a fixed price on a project:
 
 To add an activity to a project:
 POST /project/projectActivity  body: {"project": {"id": <proj_id>}, "activity": {"id": <act_id>}}
+
+---
+
+## 11b. PROJECT LIFECYCLE (ciclo de vida / full workflow / Tier 3)
+When task says "complete project lifecycle", "ciclo de vida", or includes ALL of: budget + timesheet hours + supplier cost + invoice:
+
+★ COMPLETE ALL STEPS IN ORDER — do not skip any step ★
+
+### Step 1: Create customer (if not exists)
+GET /customer?organizationNumber=<org>&count=1&fields=id,name
+If not found → POST /customer {"name":"X","organizationNumber":"Y","isCustomer":true,"email":"auto@example.com"}
+
+### Step 2: Create project manager employee (if not exists)
+GET /employee?email=<pm_email>&count=1&fields=id
+If not found → POST /employee {"firstName":"X","lastName":"Y","email":"<email>","userType":"STANDARD","dateOfBirth":"1990-01-15","department":{"id":<dept_id>}}
+Then: POST /employee/employment {employee:{id},startDate:"2020-01-01",isMainEmployer:true,division:{id:<div_id>},employmentDetails:[{date:"2020-01-01",employmentType:"ORDINARY",employmentForm:"PERMANENT",remunerationType:"MONTHLY_WAGE",workingHoursScheme:"NOT_SHIFT",percentageOfFullTimeEquivalent:100.0,annualSalary:600000}]}
+
+### Step 3: Create other employees (consultants etc.) mentioned in task — same pattern as Step 2
+
+### Step 4: Create project with budget
+POST /project {"name":"<name>","startDate":"<today>","projectManager":{"id":<pm_id>},"customer":{"id":<cust_id>},"isFixedPrice":true,"fixedprice":<budget_amount>}
+
+### Step 5: Create activity + link to project
+POST /activity {"name":"Prosjektarbeid"}  (or use task-specified activity name)
+POST /project/projectActivity {"project":{"id":<proj_id>},"activity":{"id":<act_id>}}
+
+### Step 6: Register timesheet hours for each employee
+For EACH employee mentioned with hours:
+POST /timesheet/entry {"employee":{"id":<emp_id>},"date":"<today>","hours":<hours>,"activity":{"id":<act_id>},"project":{"id":<proj_id>}}
+
+### Step 7: Register supplier cost (incoming invoice as voucher)
+GET /supplier?organizationNumber=<org>&count=1&fields=id,name  → if not found: POST /supplier
+POST /ledger/voucher {"date":"<today>","description":"Leverandørkostnad - <supplier_name>",
+  "postings":[
+    {"row":1,"account":{"id":<expense_acct_id>},"amountGrossCurrency":<cost>,"project":{"id":<proj_id>}},
+    {"row":2,"account":{"id":<2400_id>},"amountGrossCurrency":-<cost>,"supplier":{"id":<sup_id>}}
+  ]}
+★ Use expense account 4000-6999 (e.g., 6540 or 4300 Innkjøp). Get from [Account IDs] hint. ★
+★ Add "project":{"id":<proj_id>} to expense posting so cost is linked to the project ★
+
+### Step 8: Create invoice to bill the client
+POST /order {"customer":{"id":<cust_id>},"orderDate":"<today>","deliveryDate":"<today>",
+  "orderLines":[{"description":"<project_name>","count":1,"unitPriceExcludingVatCurrency":<budget_amount>,"vatType":{"id":3}}],
+  "project":{"id":<proj_id>}}
+POST /invoice {"orders":[{"id":<ord_id>}],"invoiceDate":"<today>","invoiceDueDate":"<today+30>"}
+★ Invoice amount should match the project budget/fixedprice amount ★
+
+---
+
+## 11c. REMINDER FEE + PARTIAL PAYMENT (purring / aviso de mora / Mahnung)
+When task says "overdue invoice", "reminder fee", "purring", "purregebyr", "late payment fee":
+
+### Step 1: Find the overdue invoice
+GET /invoice?invoiceDateFrom=2020-01-01&invoiceDateTo=<today>&count=50&fields=id,invoiceNumber,amount,amountCurrency,invoiceDueDate,customer(id,name)
+★ Look for invoices where invoiceDueDate < today ★
+
+### Step 2: Post reminder fee voucher
+POST /ledger/voucher {"date":"<today>","description":"Purregebyr",
+  "postings":[
+    {"row":1,"account":{"id":<1500_id>},"amountGrossCurrency":<fee_amount>,"customer":{"id":<cust_id>}},
+    {"row":2,"account":{"id":<3400_id>},"amountGrossCurrency":-<fee_amount>}
+  ]}
+★ Account 1500 = Kundefordringer (AR, debit) — REQUIRES customer ref ★
+★ Account 3400 = Purregebyr/gebyrinntekter (credit = revenue) — get ID from [Account IDs] hint or GET /ledger/account?number=3400&fields=id ★
+
+### Step 3: Create invoice for the reminder fee and send it
+POST /order {"customer":{"id":<cust_id>},"orderDate":"<today>","deliveryDate":"<today>",
+  "orderLines":[{"description":"Purregebyr / Reminder fee","count":1,"unitPriceExcludingVatCurrency":<fee_amount>,"vatType":{"id":6}}]}
+★ Reminder fees are VAT-exempt in Norway → vatType:{id:6} (0% exempt) ★
+POST /invoice {"orders":[{"id":<ord_id>}],"invoiceDate":"<today>","invoiceDueDate":"<today+14>"}
+Then send: PUT /invoice/{new_inv_id}/:send  params={"sendType":"EMAIL"}
+
+### Step 4: Register partial payment on the overdue invoice
+PUT /invoice/{overdue_inv_id}/:payment  params={"paymentDate":"<today>","paymentTypeId":<hint>,"paidAmount":<partial_amount>}
+★ paidAmount = the partial amount stated in the task (NOT full invoice amount) ★
+
+---
+
+## 11d. LEDGER ERROR CORRECTION (feil i bilag / Korrekturbuchungen / correction d'écritures)
+When task says "find errors in ledger", "correct errors", "Korrekturbuchungen", "fix journal entries", "feil i bilag":
+
+### Step 1: Fetch all postings for the specified period
+GET /ledger/posting?dateFrom=<start>&dateTo=<end>&count=1000&fields=id,date,account(id,number,name),amountGrossCurrency,description,voucher(id,date,description)
+★ This returns ALL postings — analyze them to find the errors described in the task ★
+
+### Step 2: Identify each error type and post correction vouchers
+For EACH error described in the task, post ONE correction voucher:
+
+**A. Wrong account (e.g., posted to 7300 instead of 7000):**
+POST /ledger/voucher {"date":"<error_date>","description":"Korrektur: feil konto",
+  "postings":[
+    {"row":1,"account":{"id":<wrong_acct_id>},"amountGrossCurrency":-<amount>},  ← reverse from wrong account
+    {"row":2,"account":{"id":<correct_acct_id>},"amountGrossCurrency":<amount>}   ← post to correct account
+  ]}
+
+**B. Duplicate voucher (same account+amount posted twice):**
+POST /ledger/voucher {"date":"<error_date>","description":"Korrektur: dobbel bilag",
+  "postings":[
+    {"row":1,"account":{"id":<acct_id>},"amountGrossCurrency":-<amount>},  ← reverse the extra debit
+    {"row":2,"account":{"id":<1920_id>},"amountGrossCurrency":<amount>}    ← reverse the extra credit (bank)
+  ]}
+★ Match the EXACT postings of the duplicate — look at what accounts the duplicate voucher touched ★
+
+**C. Missing VAT line (expense posted without VAT split):**
+POST /ledger/voucher {"date":"<error_date>","description":"Korrektur: manglende MVA",
+  "postings":[
+    {"row":1,"account":{"id":<expense_acct_id>},"amountGrossCurrency":-<vat_amount>},  ← reduce expense by VAT
+    {"row":2,"account":{"id":<2710_id>},"amountGrossCurrency":<vat_amount>}             ← add input VAT
+  ]}
+★ VAT = gross_amount × 0.25 / 1.25 (if 25% VAT was missing) ★
+
+**D. Wrong amount (e.g., 15200 posted instead of 13400):**
+POST /ledger/voucher {"date":"<error_date>","description":"Korrektur: feil beløp",
+  "postings":[
+    {"row":1,"account":{"id":<acct_id>},"amountGrossCurrency":-<difference>},  ← reduce by difference
+    {"row":2,"account":{"id":<1920_id>},"amountGrossCurrency":<difference>}    ← adjust bank
+  ]}
+★ difference = posted_amount - correct_amount (e.g., 15200-13400=1800 → reverse 1800) ★
+
+★ Post one voucher per error — do NOT combine all corrections into one ★
+★ Use dates from the ORIGINAL erroneous posting ★
+★ Account IDs from [Account IDs] hint or from the GET /ledger/posting response ★
+
+---
+
+## 11e. MONTH-END CLOSING (månedsavslutning / månavslutninga / Monatsabschluss)
+When task says "month-end closing", "månedsavslutning", "månavslutninga", "Monatsabschluss", "encerramento mensal":
+
+★ Different from year-end (Section 21) — month-end uses MONTHLY amounts ★
+
+### A. Prepaid expense accrual (periodisering forskuddsbetalt)
+Debit cost account, credit prepaid account (1710):
+POST /ledger/voucher {"date":"<month_end_date>","description":"Periodisering forskuddsbetalt kostnad",
+  "postings":[
+    {"row":1,"account":{"id":<cost_acct_id>},"amountGrossCurrency":<monthly_amount>},
+    {"row":2,"account":{"id":<1710_id>},"amountGrossCurrency":-<monthly_amount>}
+  ]}
+★ monthly_amount = as specified in task (e.g., "14950 kr per månad") ★
+★ cost_acct = whatever the task specifies (look for "til kostnadskonto" — get from hints) ★
+
+### B. Monthly depreciation (månadleg avskriving)
+annual_depreciation = asset_cost / lifetime_years
+monthly_depreciation = annual_depreciation / 12
+
+POST /ledger/voucher {"date":"<month_end_date>","description":"Avskriving <asset>",
+  "postings":[
+    {"row":1,"account":{"id":<depreciation_expense_id>},"amountGrossCurrency":<monthly_dep>},
+    {"row":2,"account":{"id":<accumulated_dep_id>},"amountGrossCurrency":-<monthly_dep>}
+  ]}
+★ Depreciation expense account: use what task says (e.g., 6010) ★
+★ Accumulated depreciation: contra-asset (e.g., 1209 or nearest from [Missing accounts] hint) ★
+
+### C. Salary accrual (lønnsavsetjing / Gehaltsrückstellung)
+POST /ledger/voucher {"date":"<month_end_date>","description":"Lønnsavsetjing",
+  "postings":[
+    {"row":1,"account":{"id":<5000_id>},"amountGrossCurrency":<salary_amount>},
+    {"row":2,"account":{"id":<2900_id>},"amountGrossCurrency":-<salary_amount>}
+  ]}
+★ 5000 = Lønn (salary cost, debit) ★
+★ 2900 = Påløpt lønn / Accrued salary (credit) — get from [Account IDs] hint or GET /ledger/account?number=2900&fields=id ★
+
+### D. Trial balance check (optional, only if task mentions it)
+GET /ledger/trialBalance?dateFrom=<period_start>&dateTo=<period_end>&count=1000&fields=account(number,name),openingBalance,closingBalance
+★ This is just a check — no posting needed if balance is already 0 ★
 
 ---
 
@@ -700,9 +864,13 @@ tax = net_result × 0.22
 5. Do NOT do verification GETs after creating — the POST response contains the id.
 
 ## TASK PATTERNS (match the task to the FIRST pattern that fits)
-- "Ledger analysis → create projects" (analice el libro mayor, identify expense accounts, identifisere kostnadskontoer, analysiere Hauptbuch, highest increase, størst økning) → Section 23: fetch postings for both periods, top 3 increase, create project+activity for each
-- "Bank reconciliation CSV" (rapprochement, reconcil, avstemme, bankutskrift) → Section 22: parse CSV, match by invoice number, register each payment
-- "Årsoppgjør/årsoppgjer/avskrivinger" → Section 21 (year-end): post depreciation + prepaid reversal + tax
+- "Project lifecycle" (ciclo de vida, complete project lifecycle, full project, presupuesto/budget + horas/hours + proveedor/supplier + factura/invoice) → Section 11b: full workflow (customer→employee→project→activity→hours→supplier cost→invoice)
+- "Reminder fee / overdue" (overdue, purring, purregebyr, reminder fee, Mahnung, pago atrasado, vencido) → Section 11c: find overdue invoice, post fee voucher, create+send fee invoice, partial payment
+- "Ledger error correction" (feil i bilag, Korrekturbuchung, correction, errors in ledger, corregir, korrigere, Belege) → Section 11d: GET postings, analyze errors, post correction vouchers
+- "Month-end closing" (månedsavslutning, månavslutninga, Monatsabschluss, encerramento mensal, month-end, periodiser + avskriving) → Section 11e: prepaid accrual + monthly depreciation + salary accrual
+- "Ledger analysis → create projects" (analice el libro mayor, identify expense accounts, identifisere kostnadskontoer, analysiere Hauptbuch, highest increase, størst økning, analise o livro razão) → Section 23: fetch postings for both periods, top 3 increase, create project+activity for each
+- "Bank reconciliation CSV" (rapprochement, reconcil, avstemme, bankutskrift, extrato bancario) → Section 22: parse CSV, match by invoice number, register each payment
+- "Årsoppgjør/årsoppgjer/avskrivinger" (encerramento anual) → Section 21 (year-end): post depreciation + prepaid reversal + tax
 - "FX/currency invoice payment" (agio, valuta, tipo de cambio, exchange rate) → register payment then POST /ledger/voucher for FX gain/loss (section 6)
 - "Create customer" → POST /customer with all fields
 - "Create invoice for customer" → POST /customer (if needed) → POST /order (with orderLines + deliveryDate) → POST /invoice

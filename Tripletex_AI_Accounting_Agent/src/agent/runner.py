@@ -257,16 +257,44 @@ def _classify_task(prompt: str) -> set:
 
     # Bank reconciliation — needs payment+ledger pre-flights
     if any(w in p for w in ['reconcil', 'rapproch', 'avstem', 'bankrekonsil', 'kontoutskrift',
-                              'bankutskrift', 'bank statement', 'releve bancaire', 'extracto bancario']):
+                              'bankutskrift', 'bank statement', 'releve bancaire', 'extracto bancario',
+                              'extrato bancario']):
         cats.add('payment')
         cats.add('ledger')
 
     # Ledger analysis → project creation (libro mayor / Hauptbuch analysis to identify top accounts)
-    if any(w in p for w in ['libro mayor', 'hauptbuch', 'grand livre', 'general ledger', 'analice el',
-                              'analiz', 'identif', 'størst økning', 'biggest increase', 'mayor increment',
-                              'cuentas de gastos', 'kostnadskon', 'incremento en monto']):
+    if any(w in p for w in ['libro mayor', 'hauptbuch', 'grand livre', 'general ledger', 'livro razão',
+                              'analice el', 'analise o', 'analyz', 'analysier',
+                              'størst økning', 'biggest increase', 'mayor increment',
+                              'cuentas de gastos', 'kostnadskon', 'incremento en monto',
+                              'maior aumento']):
         cats.add('ledger')
         cats.add('employee')  # need project manager ID
+
+    # Ledger error correction
+    if any(w in p for w in ['fehler', 'feil i', 'korrektur', 'korriger', 'correct', 'correction',
+                              'doppel', 'duplik', 'falsche', 'manglende mva', 'feil konto',
+                              'wrong account', 'duplicate', 'missing vat']):
+        cats.add('ledger')
+
+    # Month-end closing
+    if any(w in p for w in ['månedsavslut', 'månavslutn', 'monatsabschluss', 'month-end',
+                              'encerramento mensal', 'lønnsavsetj', 'lønnsavsetn']):
+        cats.add('ledger')
+
+    # Project lifecycle (full workflow with budget + hours + supplier + invoice)
+    if any(w in p for w in ['ciclo de vida', 'project lifecycle', 'presupuesto', 'budget']):
+        cats.add('invoice')
+        cats.add('payment')
+        cats.add('ledger')
+        cats.add('employee')
+
+    # Reminder fee / overdue invoice
+    if any(w in p for w in ['overdue', 'purring', 'purregebyr', 'reminder fee', 'mahnung',
+                              'forfalt', 'uteståande', 'utestående', 'pago atrasado', 'vencido']):
+        cats.add('invoice')
+        cats.add('payment')
+        cats.add('ledger')
 
     # Invoice/order/credit tasks (use clean prompt; exclude expense report "abrechnung")
     _has_rechnung = 'rechnung' in p_clean and 'abrechnung' not in p
@@ -288,7 +316,8 @@ def _classify_task(prompt: str) -> set:
                              'funcionario', 'funcionária', 'novo funcionario', 'nova funcionaria',
                              'funcionário', 'funcionária', 'novo funcionário', 'nova funcionária',
                              'tilsett', 'tilsette', 'ny tilsett', 'medarbeidar', 'onboarding',
-                             'tilbodsbrev', 'tilbudsbrev', 'arbeidskontrakt', 'contrato de trabalho']):
+                             'tilbodsbrev', 'tilbudsbrev', 'arbeidskontrakt', 'contrato de trabalho',
+                             'contrato de empleo', 'incorporacion', 'angestellt']):
         cats.add('employee')
 
     if any(w in p for w in ['voucher', 'bilag', 'journal', 'konter', 'dimensi', 'dimension',
@@ -296,8 +325,10 @@ def _classify_task(prompt: str) -> set:
                              'kontering', 'refusjon', 'reimburs', 'expense report',
                              'avskriv', 'årsoppgjer', 'årsoppgjør', 'depreciation',
                              'skattekostnad', 'periodisering', 'abschluss', 'year-end',
-                             'forskotsbetalt', 'prepaid', 'accrual',
-                             'agio', 'valutagevinst', 'valutatap', 'exchange rate', 'tipo de cambio']):
+                             'forskotsbetalt', 'prepaid', 'accrual', 'encerramento anual',
+                             'agio', 'valutagevinst', 'valutatap', 'exchange rate', 'tipo de cambio',
+                             'månedsavslut', 'månavslutn', 'lønnsavsetj', 'lønnsavsetn',
+                             'korrektur', 'korriger', 'correction', 'feil i bilag']):
         cats.add('ledger')
 
     return cats
@@ -421,8 +452,8 @@ async def run_agent(
         try:
             all_accts = client.get("/ledger/account", params={"count": 1000, "fields": "id,number", "from": 0})
             acct_map = {a["number"]: a["id"] for a in all_accts.get("values", [])}
-            needed = [1500, 1920, 2400, 2600, 2710, 2770, 2780, 3000, 5000,
-                      6540, 6700, 6800, 6900, 7000, 7100, 7140, 8060, 8071]
+            needed = [1500, 1700, 1710, 1920, 2400, 2600, 2710, 2770, 2780, 2900, 2920,
+                      3000, 3400, 4300, 5000, 6010, 6540, 6700, 6800, 6900, 7000, 7100, 7140, 8060, 8071]
 
             # Also pull any 4-digit account numbers the task explicitly mentions
             task_acct_nums = set(int(m) for m in _re.findall(r'\b([1-9]\d{3})\b', prompt)
