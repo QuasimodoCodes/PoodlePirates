@@ -36,9 +36,20 @@ from src.model.initial_analyzer import SeedMap, CODE_TO_CLASS, STATIC_CODES
 ALPHA = 0.05          # Bayesian update weight for single observation
                       # Realistic MC sim (stochastic obs): a=0.05 N=50 -> 71.13 avg (best)
                       # a=0.10 N=50 -> 70.74, a=0.50 N=50 -> 48.01 (too noisy)
-FLOOR_DYNAMIC = 0.005 # floor for dynamic cells — conservative: 0.001 overfits on 6 rounds
 FLOOR_STATIC = 1e-5   # floor for static cells (Mountain/Ocean)
 N_CLASSES = config.NUM_TERRAIN_CLASSES
+
+# Per-terrain floors: lower for stable cells, higher for volatile
+# Tested: +0.27 pts over uniform 0.005 floor (9-round LOO)
+TERRAIN_FLOOR = {
+    1: 0.008,   # Settlement — very unpredictable (46% Empty, 29% Sett, 22% Forest)
+    2: 0.008,   # Port — very unpredictable
+    3: 0.006,   # Ruin — moderately unpredictable
+    4: 0.003,   # Forest — quite stable (77%)
+    11: 0.004,  # Plains — fairly stable (82%)
+    0: 0.005,   # Empty — unknown
+}
+FLOOR_DYNAMIC = 0.005  # fallback for any code not in TERRAIN_FLOOR
 
 
 # ─────────────────────────────────────────────
@@ -122,6 +133,55 @@ def build_observation_index(observations: List[dict]) -> Dict[Tuple[int,int,int]
 # CORE ESTIMATOR
 # ─────────────────────────────────────────────
 
+def _build_neighbor_maps(seed_map):
+    """Count settlement and ocean neighbors within distance 2 for each dynamic cell."""
+    H, W = seed_map.height, seed_map.width
+    sett_counts = {}
+    ocean_counts = {}
+    for y in range(H):
+        for x in range(W):
+            code = seed_map.cells[y][x].initial_code
+            if code in STATIC_CODES:
+                continue
+            s_count = 0
+            o_count = 0
+            for dy in range(-2, 3):
+                for dx in range(-2, 3):
+                    if dy == 0 and dx == 0:
+                        continue
+                    ny, nx = y + dy, x + dx
+                    if 0 <= ny < H and 0 <= nx < W:
+                        nc = seed_map.cells[ny][nx].initial_code
+                        if nc == 1:
+                            s_count += 1
+                        elif nc == 10:
+                            o_count += 1
+            if s_count > 0:
+                sett_counts[(y, x)] = s_count
+            if o_count > 0:
+                ocean_counts[(y, x)] = o_count
+    return sett_counts, ocean_counts
+
+
+# Neighbor-aware adjustments based on 10-round data analysis:
+#
+# Settlement proximity (Forest/Plains):
+#   Forest near sett: -16.8% Forest, +9.4% Settlement, +7.1% Empty
+#   Plains near sett: -12.4% Empty, +8.8% Settlement
+#   Tested: +0.94 pts with sett+empty boost (10-round LOO)
+SETT_BOOST_PER = 0.01   # per nearby settlement
+SETT_BOOST_MAX = 0.05   # max total
+SETT_BOOST_CODES = {4, 11}  # Forest and Plains
+#
+# Ocean proximity (Forest/Plains/Settlement):
+#   Near ocean: +2.7% Port, -3.8% Settlement (forest), -3.9% Settlement (plains)
+#   Coastal settlements: +1.7% Port
+#   Tested: +1.76 pts with ocean boost alone, +2.65 combined (10-round LOO)
+OCEAN_BOOST_PER = 0.005  # per nearby ocean cell
+OCEAN_BOOST_MAX = 0.03   # max total
+OCEAN_BOOST_CODES = {1, 4, 11}  # Settlement, Forest, Plains
+
+
 def estimate(
     seed_map: SeedMap,
     transition_matrix: Dict[int, List[float]],
@@ -135,6 +195,10 @@ def estimate(
     """
     H = seed_map.height
     W = seed_map.width
+
+    # Precompute neighbor counts
+    sett_neighbors, ocean_neighbors = _build_neighbor_maps(seed_map)
+
     tensor = []
 
     for y in range(H):
@@ -153,6 +217,25 @@ def estimate(
                 # ── LAYER C: transition matrix prior ───────────────
                 prior = transition_matrix.get(code, [1.0/N_CLASSES]*N_CLASSES)[:]
 
+                # ── Settlement neighbor adjustment ─────────────────
+                nc = sett_neighbors.get((y, x), 0)
+                if nc > 0 and code in SETT_BOOST_CODES:
+                    boost = min(nc * SETT_BOOST_PER, SETT_BOOST_MAX)
+                    prior[1] += boost        # class 1 = Settlement (expansion)
+                    prior[0] += boost * 0.7  # class 0 = Empty (resource depletion)
+                    total_p = sum(prior)
+                    prior = [p / total_p for p in prior]
+
+                # ── Ocean neighbor adjustment ──────────────────────
+                oc = ocean_neighbors.get((y, x), 0)
+                if oc > 0 and code in OCEAN_BOOST_CODES:
+                    boost = min(oc * OCEAN_BOOST_PER, OCEAN_BOOST_MAX)
+                    prior[2] += boost  # class 2 = Port
+                    if code in (4, 11):  # suppress settlements near coast
+                        prior[1] = max(prior[1] - boost * 0.5, 0.001)
+                    total_p = sum(prior)
+                    prior = [p / total_p for p in prior]
+
                 # ── LAYER B: Bayesian update if observed ───────────
                 key = (seed_map.seed_index, y, x)
                 if key in obs_index:
@@ -170,8 +253,9 @@ def estimate(
                 else:
                     dist = prior[:]
 
-                # Apply dynamic floor
-                dist = [max(v, FLOOR_DYNAMIC) for v in dist]
+                # Apply per-terrain floor
+                floor = TERRAIN_FLOOR.get(code, FLOOR_DYNAMIC)
+                dist = [max(v, floor) for v in dist]
 
             # ── Renormalize ────────────────────────────────────────
             total = sum(dist)

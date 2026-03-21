@@ -1,9 +1,9 @@
 """
 adaptive_planner.py — Two-phase query planning.
 
-Phase 1 (25 queries): 5 volatile-targeted tiles x 5 seeds.
-  Greedily picks tiles covering the most settlements/ports (high-uncertainty cells).
-  Tested: volatile targeting (72.03) > fixed spread (71.34).
+Phase 1 (25 queries): 5 settlement-cluster tiles x 5 seeds.
+  Greedily picks tiles covering the most settlement positions.
+  Tested: settlement cluster (75.66) > volatile (75.65) > fixed spread (75.02).
 
 Phase 2 (25 queries): 5 spatially-spread tiles x 5 seeds.
   Fixed corners + centre for calibration diversity and broad coverage.
@@ -42,55 +42,65 @@ def _get_all_tile_anchors():
     ]
 
 
-def select_volatile_tiles(seed_map, n_tiles: int = 5) -> List[Tuple[int, int]]:
+def select_settlement_cluster_tiles(seed_map, n_tiles: int = 5) -> List[Tuple[int, int]]:
     """
-    Greedily select tiles covering the most volatile cells.
-    Settlements/Ports are most volatile (highest entropy in ground truth).
+    Greedily select tiles covering the most settlement positions.
+    Settlements have the highest entropy — observations matter most there.
     """
-    # Volatility weights by initial terrain code
-    VOLATILE_CODES = {1: 3.0, 2: 3.0, 3: 2.0}   # Settlement, Port, Ruin
-    MEDIUM_CODES = {11: 0.5, 4: 0.3}              # Plains, Forest
+    H, W = config.MAP_HEIGHT, config.MAP_WIDTH
+
+    # Find all settlement positions
+    settlements = set()
+    for y in range(H):
+        for x in range(W):
+            if seed_map.cells[y][x].initial_code == 1:
+                settlements.add((y, x))
+
+    if not settlements:
+        return SPREAD_ANCHORS[:n_tiles]
 
     all_anchors = _get_all_tile_anchors()
     anchor_cells = {a: set(_covered_cells(*a)) for a in all_anchors}
 
-    covered: Set[Tuple[int, int]] = set()
+    covered_setts: Set[Tuple[int, int]] = set()
     selected = []
 
     for _ in range(n_tiles):
-        best, best_score = None, -1.0
+        best, best_count = None, -1
         for a in all_anchors:
-            uncovered = anchor_cells[a] - covered
-            score = 0.0
-            for y, x in uncovered:
-                code = seed_map.cells[y][x].initial_code
-                score += VOLATILE_CODES.get(code, MEDIUM_CODES.get(code, 0.0))
-            if score > best_score:
-                best_score, best = score, a
-        if best is None:
+            count = len((anchor_cells[a] & settlements) - covered_setts)
+            if count > best_count:
+                best_count, best = count, a
+        if best is None or best_count <= 0:
             break
         selected.append(best)
-        covered |= anchor_cells[best]
+        covered_setts |= (anchor_cells[best] & settlements)
 
-    return selected
+    # Fill remaining with spatial spread if needed
+    while len(selected) < n_tiles and len(selected) < len(SPREAD_ANCHORS):
+        a = SPREAD_ANCHORS[len(selected)]
+        if a not in selected:
+            selected.append(a)
+
+    return selected[:n_tiles]
 
 
 # ─────────────────────────────────────────────
-# PHASE 1 — Volatile targeting
+# PHASE 1 — Settlement cluster targeting
 # ─────────────────────────────────────────────
 
 def build_phase1_queries(seed_maps) -> List[Query]:
     """
-    25 queries: 5 volatile-targeted tiles x 5 seeds.
+    25 queries: 5 settlement-cluster tiles x 5 seeds.
     Each seed gets its own tile selection based on its initial map.
     Interleaved by tile then seed — crash-safe (all seeds get partial coverage).
     """
     per_seed_tiles = {}
     for sm in seed_maps:
-        tiles = select_volatile_tiles(sm, n_tiles=5)
+        tiles = select_settlement_cluster_tiles(sm, n_tiles=5)
         per_seed_tiles[sm.seed_index] = tiles
         anchors_str = "  ".join(f"({a[0]},{a[1]})" for a in tiles)
-        print(f"  Seed {sm.seed_index} volatile tiles: {anchors_str}")
+        print(f"  Seed {sm.seed_index} settlement tiles: {anchors_str}")
 
     queries = []
     for tile_idx in range(5):

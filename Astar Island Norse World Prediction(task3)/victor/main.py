@@ -140,8 +140,8 @@ def main():
     raw_initial = load_raw_initial()
     historical  = load_transition_matrix(calibrated=False)
 
-    # ── 4. Phase 1 — Volatile targeting (25 queries) ─────────────────
-    section("4. Phase 1 — Volatile Targeting (25 queries)")
+    # ── 4. Phase 1 — Settlement cluster targeting (25 queries) ──────
+    section("4. Phase 1 — Settlement Cluster Targeting (25 queries)")
     phase1_queries = build_phase1_queries(seed_maps)
     print_phase_summary(1, phase1_queries)
 

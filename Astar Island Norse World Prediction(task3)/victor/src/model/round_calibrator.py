@@ -29,7 +29,6 @@ from src.model.initial_analyzer import CODE_TO_CLASS, STATIC_CODES
 
 N_CLASSES    = config.NUM_TERRAIN_CLASSES
 N_HIST       = 50    # virtual historical sample weight — lower = trust round obs more
-                     # Sweep: N_HIST=50 → 24.89, N_HIST=2000 → 24.59 (leave-one-out test)
 CLASS_NAMES  = ["Empty", "Settl", "Port", "Ruin", "Forest", "Mtn"]
 CODE_NAMES   = {0: "Empty", 1: "Settlement", 2: "Port", 3: "Ruin",
                 4: "Forest", 5: "Mountain", 10: "Ocean", 11: "Plains"}
@@ -49,6 +48,30 @@ def _build_obs_index(observations: List[dict]) -> Dict[Tuple[int,int,int], int]:
                 map_x = vp["x"] + col_i
                 index[(seed, map_y, map_x)] = code
     return index
+
+
+def _blend(round_counts, historical_matrix, n_hist):
+    """Build blended matrix with given N_HIST."""
+    blended = {}
+    for code in [0, 1, 2, 3, 4, 5, 10, 11]:
+        hist = historical_matrix.get(code, [1.0 / N_CLASSES] * N_CLASSES)
+        if code in STATIC_CODES:
+            blended[code] = hist[:]
+            continue
+        obs_list = round_counts.get(code, [])
+        n_round = len(obs_list)
+        if n_round == 0:
+            blended[code] = hist[:]
+            continue
+        round_freq = [0.0] * N_CLASSES
+        for cls in obs_list:
+            round_freq[cls] += 1.0 / n_round
+        total = n_round + n_hist
+        blended[code] = [
+            (n_round * round_freq[i] + n_hist * hist[i]) / total
+            for i in range(N_CLASSES)
+        ]
+    return blended
 
 
 def calibrate(
@@ -86,36 +109,11 @@ def calibrate(
                 if obs_code is not None:
                     round_counts[init_code].append(CODE_TO_CLASS.get(obs_code, 0))
 
-    # Build blended matrix
-    blended = {}
-    for code in [0, 1, 2, 3, 4, 5, 10, 11]:
-        hist = historical_matrix.get(code, [1.0 / N_CLASSES] * N_CLASSES)
-
-        if code in STATIC_CODES:
-            blended[code] = hist[:]
-            continue
-
-        obs_list = round_counts.get(code, [])
-        n_round  = len(obs_list)
-
-        if n_round == 0:
-            blended[code] = hist[:]
-            continue
-
-        # Empirical round frequency
-        round_freq = [0.0] * N_CLASSES
-        for cls in obs_list:
-            round_freq[cls] += 1.0 / n_round
-
-        # Weighted blend
-        total      = n_round + N_HIST
-        blended[code] = [
-            (n_round * round_freq[i] + N_HIST * hist[i]) / total
-            for i in range(N_CLASSES)
-        ]
+    n_hist = N_HIST
+    blended = _blend(round_counts, historical_matrix, n_hist)
 
     if verbose:
-        _print_report(historical_matrix, blended, round_counts)
+        _print_report(historical_matrix, blended, round_counts, n_hist)
 
     return blended
 
@@ -124,9 +122,10 @@ def _print_report(
     historical: Dict[int, List[float]],
     blended:    Dict[int, List[float]],
     round_counts: dict,
+    n_hist: int = N_HIST,
 ) -> None:
     print(f"\n  Round calibration — historical vs this round:")
-    print(f"  (N_HIST={N_HIST} virtual samples — higher = more conservative)")
+    print(f"  (N_HIST={n_hist} virtual samples — higher = more conservative)")
     print()
 
     any_flag = False
@@ -135,7 +134,7 @@ def _print_report(
         n_round = len(round_counts.get(code, []))
         hist    = historical.get(code, [])
         blend   = blended.get(code, [])
-        weight  = n_round / (n_round + N_HIST) if n_round else 0.0
+        weight  = n_round / (n_round + n_hist) if n_round else 0.0
 
         print(f"  {name} (code {code})  n={n_round}  round_weight={weight:.1%}")
 
