@@ -29,7 +29,7 @@ from src.tripletex.client import TripletexClient
 
 log = structlog.get_logger()
 
-MAX_ITERATIONS = 15
+MAX_ITERATIONS = 20
 TIMEOUT_SECONDS = 260
 
 
@@ -377,7 +377,8 @@ def _classify_task(prompt: str) -> set:
     _invoice_words = ['invoice', 'faktura', 'factura', 'facture', 'order', 'bestilling', 'commande',
                       'pedido', 'auftrag', 'credit', 'kreditnota', 'returned', 'tilbake', 'bounced',
                       'reverser', 'storniere', 'timesheet', 'timer for', 'hours for', 'horas para',
-                      'stunden', 'heures pour', 'timar', 'fatura', 'inngående', 'incoming invoice']
+                      'stunden', 'heures pour', 'timar', 'fatura', 'inngående', 'incoming invoice',
+                      'reconcil', 'rapproch', 'avstem', 'bankutskrift', 'relev']
     if any(w in p_clean for w in _invoice_words) or _has_rechnung:
         cats.add('invoice')
 
@@ -385,7 +386,8 @@ def _classify_task(prompt: str) -> set:
     if any(w in p_clean for w in ['payment', 'betaling', 'pago', 'zahlung', 'paiement', 'pagamento',
                                    'bounced', 'retur', 'avvist', 'returned', 'registrer betal',
                                    'agio', 'valuta', 'exchange rate', 'tipo de cambio', 'tipo de câmbio',
-                                   'currency', 'kurs', 'wechselkurs']):
+                                   'currency', 'kurs', 'wechselkurs', 'disagio',
+                                   'reconcil', 'rapproch', 'avstem', 'bankutskrift', 'relev']):
         cats.add('payment')
 
     if any(w in p for w in ['employee', 'ansatt', 'mitarbeiter', 'employ', 'empleado', 'medarbeider', 'ny ansatt', 'nouvel employ', 'nuevo empleado', 'neuen mitarbeiter', 'ansette',
@@ -526,7 +528,7 @@ async def run_agent(
             log.warning("travel_payment_type_lookup_failed", run_id=run_id, error=str(e))
 
         try:
-            zone_resp = client.get("/travelExpense/perDiemCompensationZone", params={"count": 20, "fields": "id,name"})
+            zone_resp = client.get("/travelExpense/perDiemCompensationZone", params={"count": 20})
             zone_values = zone_resp.get("values", [])
             if zone_values:
                 # Prefer domestic/innland zone; fall back to first
@@ -751,7 +753,9 @@ async def run_agent(
                 break
 
         # Guard against empty/blocked responses
-        if not response.candidates or response.candidates[0].content is None:
+        candidate_content = response.candidates[0].content if response.candidates else None
+        candidate_parts = getattr(candidate_content, "parts", None) if candidate_content else None
+        if not response.candidates or candidate_content is None or not candidate_parts:
             finish_reason = str(response.candidates[0].finish_reason) if response.candidates else "no_candidates"
             log.warning("gemini_empty_response", run_id=run_id, iteration=iteration, finish_reason=finish_reason)
             # MALFORMED_FUNCTION_CALL → nudge and retry instead of stopping
@@ -767,12 +771,12 @@ async def run_agent(
             break
 
         # Add model response to history
-        contents.append(response.candidates[0].content)
+        contents.append(candidate_content)
 
         # Collect function calls
         function_calls = [
             part.function_call
-            for part in response.candidates[0].content.parts
+            for part in candidate_parts
             if part.function_call is not None
         ]
 

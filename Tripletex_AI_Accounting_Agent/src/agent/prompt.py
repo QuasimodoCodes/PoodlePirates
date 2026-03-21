@@ -224,24 +224,42 @@ When an invoice was issued in a foreign currency at one rate, but payment arrive
   - invoice_amount_foreign = e.g. 5230 EUR
   - original_rate = e.g. 11.95 NOK/EUR
   - payment_rate  = e.g. 12.20 NOK/EUR
-  - nok_at_invoice = 5230 × 11.95 = 62503.50 NOK
-  - nok_at_payment = 5230 × 12.20 = 63806.00 NOK
-  - fx_gain = nok_at_payment − nok_at_invoice = 1302.50 NOK  (positive = gain, negative = loss)
 
-  Step 1: GET /invoice with invoiceDateFrom/To → find invoice; note its NOK amount
-  Step 2: Register payment (use actual NOK received):
-    PUT /invoice/{id}/:payment  params={"paymentDate":"YYYY-MM-DD","paymentTypeId":<hint>,"paidAmount":63806.0,"paidAmountCurrency":63806.0}
+  ★★★ ARITHMETIC — CALCULATE CAREFULLY ★★★
+  nok_at_invoice = invoice_amount_foreign × original_rate
+    Example: 5230 × 11.95 = 5230×12 − 5230×0.05 = 62760 − 261.50 = 62498.50 NOK
+  nok_at_payment = invoice_amount_foreign × payment_rate
+    Example: 5230 × 12.20 = 5230×12 + 5230×0.20 = 62760 + 1046 = 63806.00 NOK
+  fx_diff = nok_at_payment − nok_at_invoice
+    Example: 63806.00 − 62498.50 = 1307.50 NOK (positive = gain, negative = loss)
+
+  Step 1: Find EXISTING invoice for this customer:
+    GET /invoice?customerId=<id>&invoiceDateFrom=2020-01-01&invoiceDateTo=2030-12-31&count=10&fields=id,invoiceNumber,amount,amountCurrency,currency(id,code)
+    ★ The task says "we sent an invoice" — it SHOULD already exist. Look at ALL invoices for the customer. ★
+    ★ If invoice currency is EUR, amount/amountCurrency may be in EUR. Match by customer, not by NOK amount. ★
+    ★ If NO invoice found: You must create order+invoice at the ORIGINAL rate (nok_at_invoice) ★
+
+  Step 2: Register payment at the NEW exchange rate (actual NOK received):
+    PUT /invoice/{id}/:payment  params={"paymentDate":"YYYY-MM-DD","paymentTypeId":<hint>,"paidAmount":<nok_at_payment>,"paidAmountCurrency":<nok_at_payment>}
+    ★ This leaves the invoice partially unpaid by the FX difference amount ★
+
   Step 3: Post FX gain/loss as separate voucher (date = payment date):
     POST /ledger/voucher  body:
-      {"date": "YYYY-MM-DD", "description": "Valutagevinst EUR/NOK",
-       "postings": [
-         {"row":1, "account":{"id":<1500_id>}, "customer":{"id":<cust_id>}, "amountGrossCurrency":-1302.50, "currency":{"id":1}},
-         {"row":2, "account":{"id":<8060_id>}, "amountGrossCurrency": 1302.50, "currency":{"id":1}}
-       ]}
+      If fx_diff > 0 (GAIN — customer paid MORE in NOK than invoiced):
+        {"date": "YYYY-MM-DD", "description": "Valutagevinst <CURRENCY>/NOK",
+         "postings": [
+           {"row":1, "account":{"id":<1500_id>}, "customer":{"id":<cust_id>}, "amountGrossCurrency":<-fx_diff>, "currency":{"id":1}},
+           {"row":2, "account":{"id":<8060_id>}, "amountGrossCurrency":<fx_diff>, "currency":{"id":1}}
+         ]}
+      If fx_diff < 0 (LOSS — customer paid LESS in NOK than invoiced, "disagio"):
+        {"date": "YYYY-MM-DD", "description": "Valutatap <CURRENCY>/NOK",
+         "postings": [
+           {"row":1, "account":{"id":<8071_id>}, "amountGrossCurrency":<abs(fx_diff)>, "currency":{"id":1}},
+           {"row":2, "account":{"id":<1500_id>}, "customer":{"id":<cust_id>}, "amountGrossCurrency":<-abs(fx_diff)>, "currency":{"id":1}}
+         ]}
   ★ Account 8060 = Valutagevinst (currency gain); 8071 = Valutatap (currency loss) ★
-  ★ If fx_gain < 0 (loss): flip signs — debit 8071, credit 1500 ★
   ★★★ Account 1500 postings MUST have "customer":{"id":<cust_id>} — omitting causes "Kunde mangler" 422 ★★★
-  ★ Use [Account IDs] or [Missing task accounts] hints for account 8060/1500 IDs ★
+  ★ Use [Account IDs] or [Missing task accounts] hints for account 8060/8071/1500 IDs ★
 
 ---
 
@@ -736,17 +754,22 @@ Salary type language mapping:
 - Timelønn / Stundenlohn / Hourly → use "Timelønn" type
 
 ★ SALARY REQUIRES EMPLOYMENT WITH DIVISION ★
-Before creating salary transaction, check if employee has employment:
-  GET /employee/employment?employeeId=<id>&fields=id,division
-  If empty → create: POST /employee/employment body: {
+★★★ CRITICAL: ALWAYS check employment FIRST, BEFORE attempting salary transaction ★★★
+Step 1: GET employee: GET /employee?email=<email>&fields=id,firstName,lastName,email,version,dateOfBirth&count=1
+Step 2: Check employment: GET /employee/employment?employeeId=<id>&fields=id,division,startDate&count=1
+Step 3: If NO employment found → create it IMMEDIATELY:
+  POST /employee/employment body: {
     "employee": {"id": X},
-    "startDate": "YYYY-MM-DD",
+    "startDate": "<first day of payroll month, e.g. 2026-03-01>",
     "isMainEmployer": true,
-    "division": {"id": <from [Division id: X] hint>}  ← REQUIRED for salary
+    "division": {"id": <from [Division id: X] hint>},
+    "employmentDetails": [{"date": "<startDate>", "percentageOfFullTimeEquivalent": 100,
+      "employmentType": "ORDINARY", "employmentForm": "PERMANENT",
+      "workingHoursScheme": "NOT_SHIFT", "remunerationType": "MONTHLY_WAGE",
+      "annualSalary": <salary * 12>}]
   }
-  If POST fails with dateOfBirth → PUT /employee/{id} to add dateOfBirth, then retry employment.
-If employment already exists but salary fails with "not linked to company":
-  PUT /employee/employment/{id} body: {"id": X, "version": Y, "division": {"id": <from hint>}}
+  ★ dateOfBirth is auto-set by the system if missing — no need to set it manually ★
+Step 4: THEN create salary transaction: POST /salary/transaction (as shown above)
 
 If /salary/transaction still fails after fixing employment, fall back to a DETAILED voucher:
 ★ Use pre-discovered Account IDs from [Account IDs: ...] hint — do NOT call GET /ledger/account individually ★
@@ -774,38 +797,38 @@ When a CSV file is attached and task says "reconcile", "rapprochez", "reconcilia
 Typical format: Dato;Forklaring;Inn;Ut;Saldo  (semicolon-separated)
 - Dato = date (YYYY-MM-DD)
 - Inn = incoming amount (credit to bank, payment FROM customer)
-- Ut = outgoing amount (payment TO supplier, negative)
-- Forklaring = description — ★ ALWAYS extract the INVOICE NUMBER from here ★
+- Ut = outgoing amount (payment TO supplier)
+- Forklaring = description — extract customer/supplier name and any invoice reference
 
-### Pattern matching for descriptions:
-- "Innbetaling fra X / Faktura 1001" → incoming, invoice number=1001, customer=X
-- "Betaling fra X / Faktura 1001"    → incoming, invoice number=1001, customer=X
-- "Betaling Fournisseur X / Fakt 5" → outgoing supplier payment, invoice=5 if present
-- "Betaling til X"                   → outgoing supplier payment, no invoice number
-- "Règlement client X / Facture 7"  → incoming, invoice=7
+### Step 1 (CRITICAL — do this FIRST before processing ANY CSV row):
+★★★ Fetch ALL open invoices in ONE call ★★★
+GET /invoice?invoiceDateFrom=2020-01-01&invoiceDateTo=2030-12-31&count=100&fields=id,invoiceNumber,amount,amountCurrency,customer(id,name),invoiceDueDate
 
-### For each incoming row (Inn has a value):
-★ ALWAYS search by invoice number first — NEVER by customer name ★
-1. GET /invoice?invoiceNumber=<number>&invoiceDateFrom=2020-01-01&invoiceDateTo=2030-12-31&count=1&fields=id,amount,amountCurrency,currency
-2. PUT /invoice/{id}/:payment
-   params: {"paymentDate":"<Dato>","paymentTypeId":<from hint>,"paidAmount":<Inn_amount>}
-   ★ paidAmount = the Inn value from CSV (handles partial payments automatically) ★
+This gives you ALL invoices. Match CSV rows to invoices by CUSTOMER NAME (not invoice number — CSV uses external references like "Faktura 1001" but Tripletex uses sequential numbering 1, 2, 3...).
 
-### For each outgoing row (Ut has a value):
-If invoice number visible in description:
-  1. GET /ledger/posting?supplier.name=<name>&count=10&fields=id,amount,voucher(id)  — find AP entry
-  OR: GET /invoice?invoiceNumber=<num>&...&count=1 — if supplier invoice registered
-  Then register the payment
-If NO invoice number (just supplier name):
+### Step 2: For each INCOMING CSV row (Inn has value):
+Match by customer name from the description to the invoice list.
+If customer has multiple invoices, match by amount (closest match) or oldest first.
+PUT /invoice/{id}/:payment
+  params: {"paymentDate":"<Dato>","paymentTypeId":<from hint>,"paidAmount":<Inn_amount>,"paidAmountCurrency":<Inn_amount>}
+★ paidAmount = the Inn value from CSV (handles partial payments automatically) ★
+
+### Step 3: For each OUTGOING CSV row (Ut has value):
+★ Outgoing payments go to suppliers. Look for supplier invoices first: ★
+GET /supplierInvoice?supplierName=<name>&count=5&fields=id,amount,supplier(id,name)
+If found: Try to register payment. If /supplierInvoice has no :payment action, use voucher method below.
+If NOT found or payment fails:
   → POST /ledger/voucher with 2 postings (date=<Dato>):
-    Row 1: account 2400 (Leverandørgjeld/AP), amount=<Ut_amount> DEBIT  (reduce AP)
-    Row 2: account 1920 (Bank), amount=-<Ut_amount> CREDIT  (money leaves bank)
+    Row 1: account 2400 (AP), amountGrossCurrency=<Ut_amount> (positive = DEBIT, reduces AP)
+    Row 2: account 1920 (Bank), amountGrossCurrency=-<Ut_amount> (negative = CREDIT, money leaves bank)
+    + supplier reference if known: supplier: {"id": <supplier_id>} on the 2400 posting
     description: description from CSV
 
 ### Efficiency rule for bank reconciliation:
-★ Process ONE CSV row per Gemini iteration — do NOT try to call all payments in one response ★
-★ Each row: one GET (find invoice) then one PUT (register payment) — simple sequential flow ★
-★ Never search by customer name — always use invoice number from the description ★
+★ Make multiple tool calls per iteration — do NOT limit to one CSV row per turn ★
+★ Process as many rows as possible in parallel calls ★
+★ NEVER search invoices by invoiceNumber from CSV — those are EXTERNAL references, not Tripletex IDs ★
+★ Match by customer name from step 1 results ★
 
 ---
 
@@ -911,9 +934,9 @@ Amount and accounts as given in task. Date: last day of fiscal year.
 - "Ledger error correction" (feil i bilag, Korrekturbuchung, correction, errors in ledger, corregir, korrigere, Belege) → Section 11d: GET postings, analyze errors, post correction vouchers
 - "Month-end closing" (månedsavslutning, månavslutninga, Monatsabschluss, encerramento mensal, month-end, periodiser + avskriving) → Section 11e: prepaid accrual + monthly depreciation + salary accrual
 - "Ledger analysis → create projects" (analice el libro mayor, identify expense accounts, identifisere kostnadskontoer, analysiere Hauptbuch, highest increase, størst økning, størst auke, hovudboka, analise o livro razão) → Section 23: fetch postings for both periods, top 3 increase, create project+activity for each
-- "Bank reconciliation CSV" (rapprochement, reconcil, avstemme, bankutskrift, extrato bancario) → Section 22: parse CSV, match by invoice number, register each payment
+- "Bank reconciliation CSV" (rapprochement, reconcil, avstemme, bankutskrift, extrato bancario) → Section 22: parse CSV, GET ALL invoices FIRST, match by customer name, register each payment
 - "Årsoppgjør/årsoppgjer/avskrivinger" (encerramento anual) → Section 21 (year-end): post depreciation + prepaid reversal + tax
-- "FX/currency invoice payment" (agio, valuta, tipo de cambio, exchange rate) → register payment then POST /ledger/voucher for FX gain/loss (section 6)
+- "FX/currency invoice payment" (agio, valuta, tipo de cambio, exchange rate, Wechselkurs, disagio) → FIND existing invoice by customerId, register payment at new rate, then POST /ledger/voucher for FX gain/loss (section 6)
 - "Create customer" → POST /customer with all fields
 - "Create invoice for customer" → POST /customer (if needed) → POST /order (with orderLines + deliveryDate) → POST /invoice
 - "Register payment" → GET /invoice (with invoiceDateFrom/To) → PUT /invoice/{id}/:payment (query params!)
@@ -936,6 +959,8 @@ Amount and accounts as given in task. Date: last day of fiscal year.
 - Omit nationalIdentityNumber when PDF/contract contains a national ID, personnummer, NIF, or CPF
 - Omit employmentDetails (percentageOfFullTimeEquivalent, annualSalary) from POST /employee/employment when PDF specifies them
 - Skip the FX gain/loss voucher when registering payment on a foreign-currency invoice at a different rate
+- Search invoices by CSV reference number (CSV uses external numbers like 1001; Tripletex uses sequential 1,2,3)
+- Try POST /salary/transaction before checking employee employment (check employment FIRST)
 - Use a single debit/credit voucher for payroll (must include tax withholding at minimum)
 - Use POST for invoice payment (it's PUT /invoice/{id}/:payment with query params)
 - Use POST for credit note (it's PUT /invoice/{id}/:createCreditNote with query params)
