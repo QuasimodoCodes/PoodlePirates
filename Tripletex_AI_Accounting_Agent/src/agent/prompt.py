@@ -583,8 +583,8 @@ Search: GET /ledger/accountingDimensionName?count=20&fields=id,dimensionName,dim
 
 ---
 
-## 17. RECEIPT BOOKING (kvittering / utlegg / Tier 3 with file attachment)
-When a file is attached (receipt image or PDF) OR task mentions "kvittering"/"utlegg"/"bokfor":
+## 17. RECEIPT BOOKING (kvittering / utlegg / Quittung / recibo / reçu / Tier 3 with file attachment)
+When a file is attached (receipt image or PDF) OR task mentions "kvittering"/"utlegg"/"bokfor"/"Quittung"/"receipt"/"recibo":
 
 ★ NEVER use /incomingInvoice — competition accounts return 403 (feature disabled) ★
 ★ Go directly to POST /ledger/voucher ★
@@ -594,28 +594,36 @@ When a file is attached (receipt image or PDF) OR task mentions "kvittering"/"ut
 2. Look up or create supplier:
    GET /supplier?organizationNumber=<org>&count=1&fields=id,name
    If not found → POST /supplier {"name":..., "organizationNumber":..., "isSupplier": true}
-3. Find department (if task says "bokfort på avdeling X"):
+3. Find department (if task says "bokfort på avdeling X" / "Abteilung X" / "department X"):
    GET /department?name=X&count=1&fields=id,name
 4. Pick expense account based on item type:
-   - Office equipment / furniture / whiteboard: 6540 (Inventar)
-   - Office supplies / stationery: 7000 (Kontorrekvisita)
-   - IT equipment / computers: 6554 or 6540
-   - Phone / telecom: 7100
-   - Repairs / maintenance: 6700
-   - Other office costs: 6800
+   - Office equipment / furniture / whiteboard / inventar: 6540 (Inventar)
+   - Office supplies / stationery / kontorrekvisita: 7000 (Kontorrekvisita)
+   - IT equipment / computers: 6540 or 6554
+   - Phone / telecom / telefon: 7100 (Telefon)
+   - Repairs / maintenance / vedlikehold: 6700 (Reparasjon)
+   - Travel / transport / togbillett / flybillett / taxi: 7140 (Reisekostnad)
+   - Food / lunch / restaurant / forretningslunsj: 7100 or 6800 (Representasjon)
+   - Other office costs: 6800 (Kontorkostnad)
    ★ Use Account IDs from [Account IDs: ...] hint — do NOT call GET /ledger/account by name ★
-   ★ If account not in hint, look up by number: GET /ledger/account?number=6540&fields=id ★
+   ★ If account not in hint, look up by NUMBER: GET /ledger/account?number=7140&fields=id ★
 
-5. POST /ledger/voucher with exactly 3 postings (sum MUST equal 0):
+5. Determine VAT rate:
+   - Standard purchases: 25% → net = total / 1.25, vat = total - net
+   - Food / groceries: 15% → net = total / 1.15, vat = total - net
+   - Transport (train/bus/air) / hotel: 12% → net = total / 1.12, vat = total - net
+   - VAT exempt (some services): 0% → net = total, vat = 0 (only 2 postings needed)
+
+6. POST /ledger/voucher with exactly 3 postings (sum MUST equal 0):
 
    ★ CRITICAL VAT MATH — receipt total is INCL. VAT: ★
-     net = total_incl / 1.25          (for 25% standard VAT)
-     vat = total_incl - net           (= total × 0.20)
+     net = total_incl / (1 + rate)     (e.g., / 1.25 for 25%)
+     vat = total_incl - net
      Sum check: net + vat - total = 0 ✓
 
-   Posting 1 (expense debit):   account=<expense_acct_id>,  amount= net,        debit
-   Posting 2 (VAT debit 2710):  account=<2710_id>,           amount= vat,        debit
-   Posting 3 (AP credit 2400):  account=<2400_id>,           amount=-total_incl, credit, supplier:{id:<supplier_id>}
+   Posting 1 (expense debit):   account=<expense_acct_id>,  amountGrossCurrency= net,        row=1, description=<item>
+   Posting 2 (VAT debit 2710):  account=<2710_id>,           amountGrossCurrency= vat,        row=2, description="Inngående MVA"
+   Posting 3 (AP credit 2400):  account=<2400_id>,           amountGrossCurrency=-total_incl, row=3, description="Leverandørgjeld", supplier:{id:<supplier_id>}
 
    Add "department": {"id": <dept_id>} to Posting 1 if department was specified.
 
@@ -868,7 +876,7 @@ tax = net_result × 0.22
 - "Reminder fee / overdue" (overdue, purring, purregebyr, reminder fee, Mahnung, pago atrasado, vencido) → Section 11c: find overdue invoice, post fee voucher, create+send fee invoice, partial payment
 - "Ledger error correction" (feil i bilag, Korrekturbuchung, correction, errors in ledger, corregir, korrigere, Belege) → Section 11d: GET postings, analyze errors, post correction vouchers
 - "Month-end closing" (månedsavslutning, månavslutninga, Monatsabschluss, encerramento mensal, month-end, periodiser + avskriving) → Section 11e: prepaid accrual + monthly depreciation + salary accrual
-- "Ledger analysis → create projects" (analice el libro mayor, identify expense accounts, identifisere kostnadskontoer, analysiere Hauptbuch, highest increase, størst økning, analise o livro razão) → Section 23: fetch postings for both periods, top 3 increase, create project+activity for each
+- "Ledger analysis → create projects" (analice el libro mayor, identify expense accounts, identifisere kostnadskontoer, analysiere Hauptbuch, highest increase, størst økning, størst auke, hovudboka, analise o livro razão) → Section 23: fetch postings for both periods, top 3 increase, create project+activity for each
 - "Bank reconciliation CSV" (rapprochement, reconcil, avstemme, bankutskrift, extrato bancario) → Section 22: parse CSV, match by invoice number, register each payment
 - "Årsoppgjør/årsoppgjer/avskrivinger" (encerramento anual) → Section 21 (year-end): post depreciation + prepaid reversal + tax
 - "FX/currency invoice payment" (agio, valuta, tipo de cambio, exchange rate) → register payment then POST /ledger/voucher for FX gain/loss (section 6)
@@ -882,6 +890,7 @@ tax = net_result × 0.22
 - "Create project for customer" → POST /customer → POST /employee (+ employment) → POST /project
 - "Custom dimension" (dimensjon, Dimension, dimensión, dimension) → POST /ledger/accountingDimensionName + POST /ledger/accountingDimensionValue (section 16)
 - "Supplier/incoming invoice" → Find/create supplier → Section 17b voucher (NEVER use /incomingInvoice — always 403)
+- "Receipt/kvittering/Quittung/recibo" (expense from receipt, bokfor kvittering, Ausgabe Quittung) → Section 17: extract from PDF, voucher with VAT split, assign department
 - "Create X" → POST /X with all fields
 - "Update X" → GET /X?name=Y&fields=id,version,* → PUT /X/{id} with {id, version, fields}
 - "Delete X" → GET /X?...&fields=id → DELETE /X/{id}

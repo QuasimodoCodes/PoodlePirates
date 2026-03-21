@@ -267,7 +267,8 @@ def _classify_task(prompt: str) -> set:
                               'analice el', 'analise o', 'analyz', 'analysier',
                               'størst økning', 'biggest increase', 'mayor increment',
                               'cuentas de gastos', 'kostnadskon', 'incremento en monto',
-                              'maior aumento']):
+                              'maior aumento', 'hovudbok', 'størst auke',
+                              'kostnadskonto', 'ausgabenkont']):
         cats.add('ledger')
         cats.add('employee')  # need project manager ID
 
@@ -291,7 +292,8 @@ def _classify_task(prompt: str) -> set:
 
     # Reminder fee / overdue invoice
     if any(w in p for w in ['overdue', 'purring', 'purregebyr', 'reminder fee', 'mahnung',
-                              'forfalt', 'uteståande', 'utestående', 'pago atrasado', 'vencido']):
+                              'forfalt', 'forfallen', 'forfalne', 'uteståande', 'utestående',
+                              'pago atrasado', 'vencido', 'vencida', 'en retard']):
         cats.add('invoice')
         cats.add('payment')
         cats.add('ledger')
@@ -321,14 +323,17 @@ def _classify_task(prompt: str) -> set:
         cats.add('employee')
 
     if any(w in p for w in ['voucher', 'bilag', 'journal', 'konter', 'dimensi', 'dimension',
-                             'kvittering', 'bokfor', 'utlegg', 'receipt', 'bilagsforing',
+                             'kvittering', 'bokfor', 'bokfør', 'utlegg', 'receipt', 'bilagsforing',
                              'kontering', 'refusjon', 'reimburs', 'expense report',
                              'avskriv', 'årsoppgjer', 'årsoppgjør', 'depreciation',
                              'skattekostnad', 'periodisering', 'abschluss', 'year-end',
                              'forskotsbetalt', 'prepaid', 'accrual', 'encerramento anual',
                              'agio', 'valutagevinst', 'valutatap', 'exchange rate', 'tipo de cambio',
                              'månedsavslut', 'månavslutn', 'lønnsavsetj', 'lønnsavsetn',
-                             'korrektur', 'korriger', 'correction', 'feil i bilag']):
+                             'korrektur', 'korriger', 'correction', 'feil i bilag',
+                             'quittung', 'reçu', 'recibo', 'ausgabe', 'beleg',
+                             'purregebyr', 'purring', 'reminder fee', 'mahnung',
+                             'forfalt', 'forfallen', 'overdue', 'uteståande', 'utestående']):
         cats.add('ledger')
 
     return cats
