@@ -186,9 +186,10 @@ Find invoice: GET /invoice?invoiceDateFrom=2025-01-01&invoiceDateTo=2027-12-31&c
   ★ INVALID fields (will cause 400): description, outstandingAmount, order, balance — NEVER use these ★
 Register payment:
   PUT /invoice/{id}/:payment
-  Query params (NOT body): paymentDate=YYYY-MM-DD, paymentTypeId=<from env hint>, paidAmount=<amount>
-  Use tripletex_put with path="/invoice/{id}/:payment", body={}, params={"paymentDate":"...", "paymentTypeId": <id from [Valid paymentTypeId: X] hint>, "paidAmount": <float>}
+  Query params (NOT body): paymentDate=YYYY-MM-DD, paymentTypeId=<from env hint>, paidAmount=<amount>, paidAmountCurrency=<amount>
+  Use tripletex_put with path="/invoice/{id}/:payment", body={}, params={"paymentDate":"...", "paymentTypeId": <id from [Valid paymentTypeId: X] hint>, "paidAmount": <float>, "paidAmountCurrency": <float>}
   ★ paymentTypeId: Use the value from the [Valid paymentTypeId: X] hint at the top of the task. Do NOT use 0. ★
+  ★ paidAmount AND paidAmountCurrency: ALWAYS include BOTH — set to the SAME value for NOK payments ★
 
 ★ BOUNCED/RETURNED PAYMENT (betaling avvist, retur, Rücklastschrift, pago devuelto, bounced) ★
   This is NOT a credit note! A bounced payment means the payment was registered but the bank returned it.
@@ -533,7 +534,10 @@ Steps:
 2. If project hours: find/create project, ensure activity is linked to project
    POST /project/projectActivity {project:{id}, activity:{id}}
 3. Find activity: GET /activity?name=X&count=5
-   If not found: POST /activity {name:"X"}
+   If not found: POST /activity {"name":"X", "isProjectActivity": false, "isGeneralActivity": true}
+   ★ isGeneralActivity: true makes it available for all projects without per-project linking ★
+   ★ If you get 422 "activityType cannot be null" → the activity MUST be created via:
+     POST /project/projectActivity {"project":{"id":<proj_id>}, "activity":{"id":<act_id>}} instead ★
 4. POST /timesheet/entry (NOT /timesheet/timeEntry)
 
 Common activities: "Administrasjon", "Ferie", "Fakturerbart arbeid", "Prosjektadministrasjon"
@@ -546,14 +550,14 @@ Body: {
   "date": "YYYY-MM-DD",
   "description": "...",
   "postings": [
-    {"row": 1, "date": "YYYY-MM-DD", "account": {"id": <acct_id>}, "amount": -5000.0, "amountGross": -5000.0, "amountGrossCurrency": -5000.0, "currency": {"id": 1}},
-    {"row": 2, "date": "YYYY-MM-DD", "account": {"id": <acct_id>}, "amount": 5000.0, "amountGross": 5000.0, "amountGrossCurrency": 5000.0, "currency": {"id": 1}}
+    {"row": 1, "account": {"id": <acct_id>}, "amountGross": -5000.0, "amountGrossCurrency": -5000.0, "currency": {"id": 1}},
+    {"row": 2, "account": {"id": <acct_id>}, "amountGross": 5000.0, "amountGrossCurrency": 5000.0, "currency": {"id": 1}}
   ]
 }
 CRITICAL posting rules:
 - Field is "postings" NOT "vouchers"
 - "row" MUST be >= 1 (row 0 is system-generated, cannot be used)
-- "amountGrossCurrency" MUST equal "amountGross"
+- ★★★ EVERY posting MUST have BOTH "amountGross" AND "amountGrossCurrency" set to the SAME value. Omitting "amountGross" causes 422 error EVERY TIME. ★★★
 - If account is VAT-locked (e.g., 3000=Sales 25%), add "vatType": {"id": 3} to that posting
 - Debit amounts are positive, credit amounts are negative. Sum of all amounts must be 0.
 - ★ Account 1500 (Kundefordringer/AR) REQUIRES "customer": {"id": X} on the posting ★

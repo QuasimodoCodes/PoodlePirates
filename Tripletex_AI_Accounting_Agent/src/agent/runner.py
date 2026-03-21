@@ -198,9 +198,20 @@ def _execute_tool(name: str, args: dict, client: TripletexClient) -> dict:
         if name == "tripletex_get":
             return client.get(args["path"], params=args.get("params"))
         elif name == "tripletex_post":
-            return client.post(args["path"], body=args["body"], params=args.get("params"))
+            body = args["body"]
+            # Auto-fix: ensure amountGross == amountGrossCurrency on every voucher posting
+            if "postings" in body and isinstance(body["postings"], list):
+                for posting in body["postings"]:
+                    if isinstance(posting, dict) and "amountGrossCurrency" in posting:
+                        posting.setdefault("amountGross", posting["amountGrossCurrency"])
+                        posting.setdefault("currency", {"id": 1})
+            return client.post(args["path"], body=body, params=args.get("params"))
         elif name == "tripletex_put":
-            return client.put(args["path"], body=args["body"], params=args.get("params"))
+            params = args.get("params") or {}
+            # Auto-fix: ensure paidAmountCurrency = paidAmount on payment calls
+            if "/:payment" in args.get("path", "") and "paidAmount" in params:
+                params.setdefault("paidAmountCurrency", params["paidAmount"])
+            return client.put(args["path"], body=args["body"], params=params)
         elif name == "tripletex_delete":
             client.delete(args["path"])
             return {"status": "deleted"}
@@ -291,9 +302,10 @@ def _classify_task(prompt: str) -> set:
         cats.add('employee')
 
     # Reminder fee / overdue invoice
-    if any(w in p for w in ['overdue', 'purring', 'purregebyr', 'reminder fee', 'mahnung',
+    if any(w in p for w in ['overdue', 'purring', 'purregebyr', 'reminder fee', 'mahnung', 'mahngebuh', 'mahngebüh',
                               'forfalt', 'forfallen', 'forfalne', 'uteståande', 'utestående',
-                              'pago atrasado', 'vencido', 'vencida', 'en retard']):
+                              'pago atrasado', 'vencido', 'vencida', 'en retard',
+                              'überfällig', 'uberfallig', 'delbetaling', 'partial payment']):
         cats.add('invoice')
         cats.add('payment')
         cats.add('ledger')
