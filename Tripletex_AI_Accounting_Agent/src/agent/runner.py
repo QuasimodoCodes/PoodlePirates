@@ -229,11 +229,11 @@ def _execute_tool(name: str, args: dict, client: TripletexClient) -> dict:
         elif name == "tripletex_post":
             body = args["body"]
             path = args.get("path", "")
-            # Auto-fix: strip invalid fields from /activity POST
+            # Auto-fix: strip invalid fields from /activity POST, default activityType
             if path == "/activity":
                 body.pop("isGeneralActivity", None)
                 body.pop("isProjectActivity", None)
-                body.pop("activityType", None)
+                body.setdefault("activityType", "GENERAL_ACTIVITY")
             # Auto-fix: dates (e.g. Feb 29 in non-leap year)
             if "date" in body:
                 body["date"] = _fix_date(body["date"])
@@ -460,9 +460,8 @@ async def run_agent(
         except Exception as e:
             log.warning("department_discovery_failed", run_id=run_id, error=str(e))
 
-    # Bank account + payment type — ONLY when payment registration is involved
-    # (not for simple invoice creation, credit notes, supplier registration, etc.)
-    if need_payment:
+    # Bank account + payment type — needed for payment AND invoice creation
+    if need_payment or need_invoice:
         try:
             acct_resp = client.get("/ledger/account", params={"number": 1920, "fields": "id,version,bankAccountNumber,isBankAccount", "count": 1})
             acct_values = acct_resp.get("values", [])
