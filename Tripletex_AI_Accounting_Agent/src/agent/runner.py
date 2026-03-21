@@ -249,21 +249,15 @@ def _execute_tool(name: str, args: dict, client: TripletexClient) -> dict:
                     last = body["postings"][-1]
                     last["amountGrossCurrency"] = round(last.get("amountGrossCurrency", 0) - total, 2)
                     last["amountGross"] = last["amountGrossCurrency"]
-            # Auto-fix: for employee employment, ensure dateOfBirth is set first
+            # Auto-fix: for employee employment, try with division then without on 404
             if path == "/employee/employment" and "employee" in body:
-                emp_id = body["employee"].get("id")
-                if emp_id:
-                    try:
-                        emp_resp = client.get("/employee/" + str(emp_id), params={"fields": "id,version,dateOfBirth"})
-                        emp_data = emp_resp.get("value", emp_resp)
-                        if not emp_data.get("dateOfBirth"):
-                            client.put(f"/employee/{emp_id}", body={
-                                "id": emp_id, "version": emp_data.get("version", 1),
-                                "dateOfBirth": "1990-01-15"
-                            })
-                            log.info("auto_set_dateOfBirth", employee_id=emp_id)
-                    except Exception:
-                        pass  # best-effort, don't block
+                result = client.post(args["path"], body=body, params=args.get("params"))
+                # If 404 (bad division id), retry without division
+                if isinstance(result, dict) and result.get("error", {}).get("status") == 404 and "division" in body:
+                    body_no_div = {k: v for k, v in body.items() if k != "division"}
+                    log.info("auto_retry_employment_no_division", employee_id=body["employee"].get("id"))
+                    result = client.post(args["path"], body=body_no_div, params=args.get("params"))
+                return result
             return client.post(args["path"], body=body, params=args.get("params"))
         elif name == "tripletex_put":
             params = args.get("params") or {}
@@ -359,12 +353,14 @@ def _classify_task(prompt: str) -> set:
                               'encerramento mensal', 'lønnsavsetj', 'lønnsavsetn']):
         cats.add('ledger')
 
-    # Project lifecycle (full workflow with budget + hours + supplier + invoice)
-    if any(w in p for w in ['ciclo de vida', 'project lifecycle', 'presupuesto', 'budget']):
+    # Project tasks (creation + lifecycle) — needs employee hint for PM lookup + division hint
+    if any(w in p for w in ['prosjekt', 'projekt', 'project', 'proyecto', 'projet', 'ciclo de vida',
+                              'project lifecycle', 'prosjektsyklusen', 'ciclo completo',
+                              'projeto', 'presupuesto', 'budget']):
+        cats.add('employee')  # so division hint is available for employment
         cats.add('invoice')
         cats.add('payment')
         cats.add('ledger')
-        cats.add('employee')
 
     # Reminder fee / overdue invoice
     if any(w in p for w in ['overdue', 'purring', 'purregebyr', 'reminder fee', 'mahnung', 'mahngebuh', 'mahngebüh',
@@ -736,6 +732,9 @@ async def run_agent(
                     if match:
                         retry_after_secs = max(retry_after_secs, int(float(match.group(1))) + 5)
                     continue  # try next model
+                elif "503" in err or "unavailable" in err.lower() or "overloaded" in err.lower():
+                    log.warning("gemini_unavailable", run_id=run_id, model=model)
+                    continue  # try next model on 503
                 else:
                     raise
 

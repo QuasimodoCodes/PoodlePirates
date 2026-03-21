@@ -339,48 +339,48 @@ POST /project/projectActivity  body: {"project": {"id": <proj_id>}, "activity": 
 ---
 
 ## 11b. PROJECT LIFECYCLE (ciclo de vida / full workflow / Tier 3)
-When task says "complete project lifecycle", "ciclo de vida", or includes ALL of: budget + timesheet hours + supplier cost + invoice:
+When task says "complete project lifecycle", "ciclo de vida", "prosjektsyklusen", or includes ALL of: budget + timesheet hours + supplier cost + invoice:
 
 ★ COMPLETE ALL STEPS IN ORDER — do not skip any step ★
+★★★ NEVER create employment for any employee in project lifecycle tasks ★★★
+★★★ Employees only need their id — look them up by email, that's all ★★★
 
-### Step 1: Create customer (if not exists)
-GET /customer?organizationNumber=<org>&count=1&fields=id,name
-If not found → POST /customer {"name":"X","organizationNumber":"Y","isCustomer":true,"email":"auto@example.com"}
+### Step 1: Find customer and all employees IN PARALLEL (ONE iteration)
+Make ALL these GET calls simultaneously:
+- GET /customer?organizationNumber=<org>&count=1&fields=id,name
+- GET /employee?email=<pm_email>&count=1&fields=id,firstName,lastName
+- GET /employee?email=<consultant_email>&count=1&fields=id,firstName,lastName  (if another employee in task)
+If customer not found → POST /customer {"name":"X","organizationNumber":"Y","isCustomer":true}
+If employee not found → POST /employee {"firstName":"X","lastName":"Y","email":"<email>","userType":"STANDARD","dateOfBirth":"1990-01-15"}
+★ DO NOT create employment after creating employee in project tasks ★
 
-### Step 2: Create project manager employee (if not exists)
-GET /employee?email=<pm_email>&count=1&fields=id
-If not found → POST /employee {"firstName":"X","lastName":"Y","email":"<email>","userType":"STANDARD","dateOfBirth":"1990-01-15","department":{"id":<dept_id>}}
-Then: POST /employee/employment {employee:{id},startDate:"2020-01-01",isMainEmployer:true,division:{id:<div_id>},employmentDetails:[{date:"2020-01-01",employmentType:"ORDINARY",employmentForm:"PERMANENT",remunerationType:"MONTHLY_WAGE",workingHoursScheme:"NOT_SHIFT",percentageOfFullTimeEquivalent:100.0,annualSalary:600000}]}
-
-### Step 3: Create other employees (consultants etc.) mentioned in task — same pattern as Step 2
-
-### Step 4: Create project with budget
+### Step 2: Create project with budget
 POST /project {"name":"<name>","startDate":"<today>","projectManager":{"id":<pm_id>},"customer":{"id":<cust_id>},"isFixedPrice":true,"fixedprice":<budget_amount>}
 
-### Step 5: Create activity + link to project
-POST /activity {"name":"Prosjektarbeid", "activityType":"PROJECT_GENERAL_ACTIVITY"}  (or use task-specified activity name)
-POST /project/projectActivity {"project":{"id":<proj_id>},"activity":{"id":<act_id>}}
+### Step 3: Create activity + link to project (IN PARALLEL)
+POST /activity {"name":"<activity_name or 'Prosjektarbeid'>", "activityType":"PROJECT_GENERAL_ACTIVITY"}
+Then: POST /project/projectActivity {"project":{"id":<proj_id>},"activity":{"id":<act_id>}}
 
-### Step 6: Register timesheet hours for each employee
-For EACH employee mentioned with hours:
-POST /timesheet/entry {"employee":{"id":<emp_id>},"date":"<today>","hours":<hours>,"activity":{"id":<act_id>},"project":{"id":<proj_id>}}
+### Step 4: Register timesheet hours for ALL employees (IN PARALLEL)
+Make ALL timesheet POSTs simultaneously:
+POST /timesheet/entry {"employee":{"id":<pm_id>},"date":"<today>","hours":<pm_hours>,"activity":{"id":<act_id>},"project":{"id":<proj_id>}}
+POST /timesheet/entry {"employee":{"id":<consultant_id>},"date":"<today>","hours":<consultant_hours>,"activity":{"id":<act_id>},"project":{"id":<proj_id>}}
 
-### Step 7: Register supplier cost (incoming invoice as voucher)
+### Step 5: Register supplier cost (incoming invoice as voucher)
 GET /supplier?organizationNumber=<org>&count=1&fields=id,name  → if not found: POST /supplier
 POST /ledger/voucher {"date":"<today>","description":"Leverandørkostnad - <supplier_name>",
   "postings":[
     {"row":1,"account":{"id":<expense_acct_id>},"amountGrossCurrency":<cost>,"project":{"id":<proj_id>}},
     {"row":2,"account":{"id":<2400_id>},"amountGrossCurrency":-<cost>,"supplier":{"id":<sup_id>}}
   ]}
-★ Use expense account 4000-6999 (e.g., 6540 or 4300 Innkjøp). Get from [Account IDs] hint. ★
-★ Add "project":{"id":<proj_id>} to expense posting so cost is linked to the project ★
+★ Use expense account 4000-6999 (e.g., 6540 or 4300). Get from [Account IDs] hint. ★
 
-### Step 8: Create invoice to bill the client
+### Step 6: Create invoice to bill the client
 POST /order {"customer":{"id":<cust_id>},"orderDate":"<today>","deliveryDate":"<today>",
   "orderLines":[{"description":"<project_name>","count":1,"unitPriceExcludingVatCurrency":<budget_amount>,"vatType":{"id":3}}],
   "project":{"id":<proj_id>}}
 POST /invoice {"orders":[{"id":<ord_id>}],"invoiceDate":"<today>","invoiceDueDate":"<today+30>"}
-★ Invoice amount should match the project budget/fixedprice amount ★
+PUT /invoice/{inv_id}/:send  params={"sendType":"EMAIL"}
 
 ---
 
@@ -957,7 +957,7 @@ Amount and accounts as given in task. Date: last day of fiscal year.
 - "Credit note" (kreditnota, Gutschrift, nota de crédito) → GET /invoice → PUT /invoice/{id}/:createCreditNote (query params!)
 - "Payroll/salary" (lønn, Gehalt, salaire, salario) → POST /salary/transaction OR detailed voucher (section 19)
 - "Set fixed price" (fastpris, sett fastpris, precio fijo, Festpreis, prix fixe) → Search project by name → PUT /project/{id} with isFixedPrice:true + fixedprice:<amount> (section 11) ★ Do NOT create orders/invoices ★
-- "Create project for customer" → POST /customer → POST /employee (+ employment) → POST /project
+- "Create project for customer" → GET customer, GET employee (PM) → POST /project (NO employment creation)
 - "Custom dimension" (dimensjon, Dimension, dimensión, dimension) → POST /ledger/accountingDimensionName + POST /ledger/accountingDimensionValue (section 16)
 - "Supplier/incoming invoice" → Find/create supplier → Section 17b voucher (NEVER use /incomingInvoice — always 403)
 - "Receipt/kvittering/Quittung/recibo" (expense from receipt, bokfor kvittering, Ausgabe Quittung) → Section 17: extract from PDF, voucher with VAT split, assign department
@@ -981,6 +981,8 @@ Amount and accounts as given in task. Date: last day of fiscal year.
 - Skip invoiceDueDate on invoices (required — default to invoiceDate + 30 days)
 - Skip deliveryDate on orders (required — use orderDate if not specified)
 - Skip POST /employee/employment after creating employee
+- Create employment for project managers or consultants in PROJECT tasks (NEVER — just use employee id)
+- Check dateOfBirth or create employment when task only asks to create a project
 - Omit "email" when creating employees (validation requires it)
 - Omit "userType" when creating employees (must be "STANDARD" or "ADMINISTRATOR")
 - Omit "dateOfBirth" when creating employees (required for employment — use "1990-01-15" as default)
