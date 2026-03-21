@@ -272,7 +272,10 @@ def _classify_task(prompt: str) -> set:
 
     if any(w in p for w in ['voucher', 'bilag', 'journal', 'konter', 'dimensi', 'dimension',
                              'kvittering', 'bokfor', 'utlegg', 'receipt', 'bilagsforing',
-                             'kontering', 'refusjon', 'reimburs', 'expense report']):
+                             'kontering', 'refusjon', 'reimburs', 'expense report',
+                             'avskriv', 'årsoppgjer', 'årsoppgjør', 'depreciation',
+                             'skattekostnad', 'periodisering', 'abschluss', 'year-end',
+                             'forskotsbetalt', 'prepaid', 'accrual']):
         cats.add('ledger')
 
     return cats
@@ -398,11 +401,34 @@ async def run_agent(
             acct_map = {a["number"]: a["id"] for a in all_accts.get("values", [])}
             needed = [1920, 2400, 2600, 2710, 2770, 2780, 3000, 5000,
                       6540, 6700, 6800, 6900, 7000, 7100, 7140]
-            found = {n: acct_map[n] for n in needed if n in acct_map}
+
+            # Also pull any 4-digit account numbers the task explicitly mentions
+            task_acct_nums = set(int(m) for m in _re.findall(r'\b([1-9]\d{3})\b', prompt)
+                                 if 1000 <= int(m) <= 9999)
+            all_needed = sorted(set(needed) | task_acct_nums)
+
+            found = {n: acct_map[n] for n in all_needed if n in acct_map}
             if found:
                 acct_hints = " | ".join(f"{n}={aid}" for n, aid in sorted(found.items()))
                 env_hints.append(f"[Account IDs: {acct_hints}]")
-                log.info("accounts_discovered", run_id=run_id, count=len(found))
+
+            # For task accounts not found, report nearest alternative so agent doesn't waste GETs
+            missing_hints = []
+            for num in sorted(task_acct_nums):
+                if num not in acct_map:
+                    # nearest in same 100-range, then same 1000-range
+                    candidates = [(n, aid) for n, aid in acct_map.items() if n // 100 == num // 100]
+                    if not candidates:
+                        candidates = [(n, aid) for n, aid in acct_map.items() if n // 1000 == num // 1000]
+                    if candidates:
+                        nearest = min(candidates, key=lambda x: abs(x[0] - num))
+                        missing_hints.append(f"{num}=NOT FOUND→use {nearest[0]}({nearest[1]})")
+                    else:
+                        missing_hints.append(f"{num}=NOT FOUND")
+            if missing_hints:
+                env_hints.append(f"[Missing task accounts — use nearest: {' | '.join(missing_hints)}]")
+
+            log.info("accounts_discovered", run_id=run_id, count=len(found), missing=len(missing_hints))
         except Exception as e:
             log.warning("account_discovery_failed", run_id=run_id, error=str(e))
 

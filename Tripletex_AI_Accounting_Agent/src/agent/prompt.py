@@ -513,6 +513,45 @@ Use extracted values directly in API calls — do not ask for clarification.
 
 ---
 
+## 21. YEAR-END CLOSING (årsoppgjør / forenkla årsoppgjør / Tier 3)
+When task mentions "årsoppgjør", "årsoppgjer", "avskrivinger", "skattekostnad", "periodisering", "forskotsbetalt":
+
+★ COMPLETE ALL STEPS — never skip a step because one account is missing ★
+★ Use [Account IDs] and [Missing task accounts] hints — don't GET accounts already provided ★
+
+### A. Depreciation (avskrivinger / avskrivningar)
+Formula: annual = asset_cost / lifetime_years  (straight-line / lineær)
+Post as SEPARATE voucher per asset using date = last day of fiscal year (e.g. "2025-12-31"):
+
+For each asset:
+  Debit:  depreciation expense account (6010 or as specified in task)
+  Credit: accumulated depreciation account (1209 or as specified in task)
+
+★ If the [Missing task accounts] hint says "1209=NOT FOUND→use 1210(id:X)", use id:X directly ★
+★ NEVER call GET /ledger/account by name (name search is unreliable — returns wrong account) ★
+★ NEVER GET accounts that are already in the hints ★
+
+### B. Prepaid cost reversal (reversering av forskotsbetalt / periodisering)
+  Debit:  corresponding expense/cost account
+  Credit: prepaid account (1700 or as specified)
+Amount and accounts as given in task. Date: last day of fiscal year.
+
+### C. Tax entry (skattekostnad)
+22% Norwegian corporate tax on taxable result:
+  Debit:  8700 (Skattekostnad / tax expense) or nearest per hint
+  Credit: 2920 (Betalbar skatt / tax payable) or nearest per hint
+
+If taxable result is not given: GET /ledger/trialBalance?year=<YYYY>&from=0&count=1000&fields=account,openingBalance,closingBalance
+Sum all income accounts (3xxx credit = positive income) minus all cost accounts (4xxx-8xxx debit).
+tax = net_result × 0.22
+
+### Execution order:
+1. Post ALL depreciation vouchers (one per asset, date=2025-12-31)
+2. Post prepaid/accrual reversals
+3. Post tax entry last (depends on full-year result including depreciation)
+
+---
+
 ## STRATEGY (follow this exactly)
 1. Read and understand the task — identify the EXACT pattern from the list below.
    ★ Pay close attention to keywords: "bounced"/"avvist"/"retur" = REVERSE payment, NOT credit note ★
@@ -529,7 +568,7 @@ Use extracted values directly in API calls — do not ask for clarification.
 5. Do NOT do verification GETs after creating — the POST response contains the id.
 
 ## TASK PATTERNS (match the task to the FIRST pattern that fits)
-- "Create employee" → POST /employee (with email, userType, dateOfBirth) → POST /employee/employment
+- "Årsoppgjør/årsoppgjer/avskrivinger" → Section 21 (year-end): post depreciation + prepaid reversal + tax
 - "Create customer" → POST /customer with all fields
 - "Create invoice for customer" → POST /customer (if needed) → POST /order (with orderLines + deliveryDate) → POST /invoice
 - "Register payment" → GET /invoice (with invoiceDateFrom/To) → PUT /invoice/{id}/:payment (query params!)
@@ -546,7 +585,9 @@ Use extracted values directly in API calls — do not ask for clarification.
 - "Delete X" → GET /X?...&fields=id → DELETE /X/{id}
 
 ## NEVER
-- Use :createCreditNote for bounced/returned payments (use PUT /:payment with NEGATIVE paidAmount instead)
+- Skip depreciation steps if a specified account isn't found (use nearest per [Missing task accounts] hint)
+- Stop after fewer steps than the task requires on multi-step year-end tasks (complete ALL steps)
+- Call GET /ledger/account by NAME (returns wrong results — always use number or the pre-built hints)
 - Use a single debit/credit voucher for payroll (must include tax withholding at minimum)
 - Use POST for invoice payment (it's PUT /invoice/{id}/:payment with query params)
 - Use POST for credit note (it's PUT /invoice/{id}/:createCreditNote with query params)
