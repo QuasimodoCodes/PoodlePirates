@@ -1,3 +1,4 @@
+
 """
 main.py — Full pipeline orchestrator for Astar Island Norse World Prediction.
 
@@ -19,7 +20,7 @@ import argparse
 
 from src.api.client import AstarClient
 from src.model.initial_analyzer import analyze, build_seed_maps
-from src.model.terrain_estimator import estimate_all_seeds, load_transition_matrix
+from src.model.terrain_estimator import estimate_all_seeds, load_transition_matrix, load_conditional_matrix
 from src.model.round_calibrator import calibrate, save_calibrated_matrix
 from src.observation.adaptive_planner import (
     build_phase1_queries, build_phase2_spread_queries, print_phase_summary
@@ -68,25 +69,6 @@ def main():
     ROUND_ID = client.get_active_round_id()
     print(f"  Token loaded. Active round: {ROUND_ID}")
 
-    # ── Clean stale files from previous rounds ─────────────────────
-    stale_files = [
-        os.path.join(config.DATA_DIR, "round_calibrated_matrix.json"),
-        os.path.join(config.DATA_DIR, "initial_states.json"),
-    ]
-    # Also clean old observations
-    obs_dir = os.path.join(config.DATA_DIR, "observations")
-    if os.path.exists(obs_dir):
-        for f in os.listdir(obs_dir):
-            stale_files.append(os.path.join(obs_dir, f))
-
-    cleaned = 0
-    for path in stale_files:
-        if os.path.exists(path):
-            os.remove(path)
-            cleaned += 1
-    if cleaned:
-        print(f"  Cleaned {cleaned} stale file(s) from previous round")
-
     # ── 2. Initial states (always fetch fresh) ─────────────────────
     section("2. Initial States (free)")
     seed_maps = analyze(client, ROUND_ID, verbose=False)
@@ -103,7 +85,7 @@ def main():
         for seed_idx in range(config.NUM_SEEDS):
             path = os.path.join(config.PREDICTIONS_DIR, f"seed{seed_idx}_tensor.json")
             if not os.path.exists(path):
-                print(f"  ❌ Missing tensor for seed {seed_idx}: {path}")
+                print(f"  Missing tensor for seed {seed_idx}: {path}")
                 sys.exit(1)
             with open(path) as f:
                 data = json.load(f)
@@ -117,12 +99,44 @@ def main():
     budget = client.get_budget(ROUND_ID)
     print(f"  Queries: {budget.queries_used} used / {budget.queries_max} max "
           f"({budget.queries_remaining} remaining)")
-    if budget.is_exhausted:
-        print("  ⚠️  Budget exhausted — switching to --no-observe mode")
+
+    # ── Check for existing observations before cleaning ──────────────
+    obs_dir = os.path.join(config.DATA_DIR, "observations")
+    existing_obs = []
+    if os.path.exists(obs_dir):
+        existing_obs = [f for f in os.listdir(obs_dir) if f.endswith('.json')]
+
+    if budget.is_exhausted and existing_obs:
+        # Budget spent AND observations exist on disk — use them (don't clean!)
+        print(f"  Budget exhausted but {len(existing_obs)} observation files found on disk.")
+        print(f"  Using existing observations for calibration (skipping cleanup + queries).")
         args.no_observe = True
+        args._use_existing_obs = True
+    elif budget.is_exhausted:
+        # Budget spent and no observations — pure prior mode
+        print("  Budget exhausted, no observations on disk — using prior only.")
+        args.no_observe = True
+        args._use_existing_obs = False
+    else:
+        # Fresh budget — clean stale files and run queries
+        stale_files = [
+            os.path.join(config.DATA_DIR, "round_calibrated_matrix.json"),
+            os.path.join(config.DATA_DIR, "initial_states.json"),
+        ]
+        if os.path.exists(obs_dir):
+            for f in os.listdir(obs_dir):
+                stale_files.append(os.path.join(obs_dir, f))
+        cleaned = 0
+        for path in stale_files:
+            if os.path.exists(path):
+                os.remove(path)
+                cleaned += 1
+        if cleaned:
+            print(f"  Cleaned {cleaned} stale file(s) from previous round")
+        args._use_existing_obs = False
 
     # ── No-observe shortcut ──────────────────────────────────────────
-    if args.no_observe:
+    if args.no_observe and not getattr(args, '_use_existing_obs', False):
         section("4. Predictions (transition matrix only — no queries)")
         print("  Skipping simulate() queries.")
         tensors = estimate_all_seeds(seed_maps, observations=[])
@@ -134,43 +148,51 @@ def main():
         return
 
     # ════════════════════════════════════════════════════════════════
-    # TWO-PHASE ADAPTIVE PIPELINE
+    # TWO-PHASE ADAPTIVE PIPELINE (or reuse existing observations)
     # ════════════════════════════════════════════════════════════════
 
-    raw_initial = load_raw_initial()
-    historical  = load_transition_matrix(calibrated=False)
+    raw_initial  = load_raw_initial()
+    historical   = load_transition_matrix(calibrated=False)
+    cond_matrix  = load_conditional_matrix()
 
-    # ── 4. Phase 1 — Settlement cluster targeting (25 queries) ──────
-    section("4. Phase 1 — Settlement Cluster Targeting (25 queries)")
-    phase1_queries = build_phase1_queries(seed_maps)
-    print_phase_summary(1, phase1_queries)
+    use_existing = getattr(args, '_use_existing_obs', False)
 
-    if args.dry_run:
-        print("  [DRY RUN] — would execute Phase 1 queries.")
+    if not use_existing:
+        # ── 4. Phase 1 — Settlement cluster targeting (25 queries) ──────
+        section("4. Phase 1 — Settlement Cluster Targeting (25 queries)")
+        phase1_queries = build_phase1_queries(seed_maps)
+        print_phase_summary(1, phase1_queries)
+
+        if args.dry_run:
+            print("  [DRY RUN] — would execute Phase 1 queries.")
+        else:
+            run_observations(client, ROUND_ID, phase1_queries)
+
+        # ── 5. Phase 2 — Spread coverage (25 queries) ──────────────────
+        section("5. Phase 2 — Spread Coverage (25 queries)")
+        phase2_queries = build_phase2_spread_queries(seed_maps)
+        print_phase_summary(2, phase2_queries)
+
+        if args.dry_run:
+            print("  [DRY RUN] — would execute Phase 2 queries.")
+        else:
+            run_observations(client, ROUND_ID, phase2_queries)
     else:
-        run_observations(client, ROUND_ID, phase1_queries)
+        print("  Skipping query phases — using existing observations on disk.")
 
-    # ── 5. Phase 2 — Spread coverage (25 queries) ──────────────────
-    section("5. Phase 2 — Spread Coverage (25 queries)")
-    phase2_queries = build_phase2_spread_queries(seed_maps)
-    print_phase_summary(2, phase2_queries)
-
-    if args.dry_run:
-        print("  [DRY RUN] — would execute Phase 2 queries.")
-    else:
-        run_observations(client, ROUND_ID, phase2_queries)
-
-    # ── 6. Calibration (all 50 observations) ──────────────────────────
-    section("6. Calibration (all 50 observations)")
+    # ── 6. Calibration (all observations) ──────────────────────────────
+    section("6. Calibration (observations)")
     obs_all = load_all_observations()
-    print(f"  All observations loaded: {len(obs_all)} files")
+    print(f"  Observations loaded: {len(obs_all)} files")
 
-    blended_final = calibrate(raw_initial, obs_all, historical, verbose=True)
+    blended_final, _round_metrics = calibrate(raw_initial, obs_all, historical, verbose=True,
+                                               conditional_matrix=cond_matrix)
     save_calibrated_matrix(blended_final)
 
     # ── 7. Final predictions ─────────────────────────────────────────
     section("7. Final Predictions")
-    tensors = estimate_all_seeds(seed_maps, observations=obs_all)
+    tensors = estimate_all_seeds(seed_maps, observations=obs_all,
+                                  conditional_matrix=cond_matrix)
 
     # ── 8. Validate & save ──────────────────────────────────────────
     section("8. Validate & Save Tensors")

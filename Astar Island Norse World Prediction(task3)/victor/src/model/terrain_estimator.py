@@ -1,5 +1,5 @@
 """
-terrain_estimator.py — Step 9: Build per-cell H×W×6 probability distributions.
+terrain_estimator.py — Build per-cell H×W×6 probability distributions.
 
 Three stacked layers (applied in order):
 
@@ -7,22 +7,22 @@ Three stacked layers (applied in order):
     Predict with near-certainty from initial_states. Free, no queries.
     Floor: 1e-5
 
-  LAYER C — Transition matrix prior (base for ALL dynamic cells)
-    Real data from 3 rounds of ground truth (24,000 cells).
-    transition_matrix[initial_code] = [P(class0)..P(class5)]
-    Floor: 0.01
+  LAYER C — Conditional transition matrix prior (base for ALL dynamic cells)
+    Uses context-aware distributions: P(outcome | terrain_code, sett_bin, ocean_bin)
+    Built from historical round data. Falls back to flat matrix per terrain code.
+    Floor: per-terrain (see TERRAIN_FLOOR)
 
   LAYER B — Bayesian update when simulate() observations exist
     posterior = (1 - α) × transition_prior  +  α × one_hot(observed_class)
-    α = 0.55 (tunable — see learning_log.md)
+    α = 0.05 (tuned via Monte Carlo simulation)
     Applied ON TOP of Layer C when we have a direct observation.
-    Floor: 0.01
 
 Order: C → B (if observed) → A (if static) → floor → renormalize
 """
 
 import json
 import os
+from collections import defaultdict
 from typing import List, Dict, Optional, Tuple
 
 import config
@@ -33,36 +33,191 @@ from src.model.initial_analyzer import SeedMap, CODE_TO_CLASS, STATIC_CODES
 # CONSTANTS
 # ─────────────────────────────────────────────
 
-ALPHA = 0.05          # Bayesian update weight for single observation
-                      # Realistic MC sim (stochastic obs): a=0.05 N=50 -> 71.13 avg (best)
-                      # a=0.10 N=50 -> 70.74, a=0.50 N=50 -> 48.01 (too noisy)
+ALPHA_1OBS = 0.03     # Bayesian weight for single observation (noisy)
+ALPHA_MULTI = 0.10    # Bayesian weight for 2+ observations (more reliable)
+                      # Stepped alpha tested: +0.18 pts (18-round LOO)
+ALPHA = 0.05          # Legacy default (used if called with explicit alpha)
+TEMPERATURE = 1.10    # Prediction softening: >1 softens, <1 sharpens
+                      # Tested: t=1.10 -> +0.53 pts (11-round LOO)
+                      # Hedges against round-specific parameter variance
 FLOOR_STATIC = 1e-5   # floor for static cells (Mountain/Ocean)
 N_CLASSES = config.NUM_TERRAIN_CLASSES
 
-# Per-terrain floors: lower for stable cells, higher for volatile
-# Tested: +0.27 pts over uniform 0.005 floor (9-round LOO)
+# Per-terrain floors: data-driven from historical minimums
+# Tested: 0.001 uniform = +0.93 pts over previous per-terrain floors (18-round LOO)
+# Lower floors steal less probability from the dominant class
 TERRAIN_FLOOR = {
-    1: 0.008,   # Settlement — very unpredictable (46% Empty, 29% Sett, 22% Forest)
-    2: 0.008,   # Port — very unpredictable
-    3: 0.006,   # Ruin — moderately unpredictable
-    4: 0.003,   # Forest — quite stable (77%)
-    11: 0.004,  # Plains — fairly stable (82%)
-    0: 0.005,   # Empty — unknown
+    1: 0.001,   # Settlement
+    2: 0.001,   # Port
+    3: 0.001,   # Ruin
+    4: 0.001,   # Forest
+    11: 0.001,  # Plains
+    0: 0.001,   # Empty
 }
-FLOOR_DYNAMIC = 0.005  # fallback for any code not in TERRAIN_FLOOR
+FLOOR_DYNAMIC = 0.001  # fallback for any code not in TERRAIN_FLOOR
+
+
+def _apply_temperature(dist: List[float], temp: float) -> List[float]:
+    """Apply temperature scaling: temp>1 softens (spreads probability), temp<1 sharpens."""
+    if temp == 1.0:
+        return dist
+    import math
+    log_dist = [math.log(max(p, 1e-12)) / temp for p in dist]
+    max_log = max(log_dist)
+    exp_dist = [math.exp(v - max_log) for v in log_dist]
+    total = sum(exp_dist)
+    return [v / total for v in exp_dist]
 
 
 # ─────────────────────────────────────────────
-# TRANSITION MATRIX LOADER
+# CELL CONTEXT (for conditional matrix lookup)
+# ─────────────────────────────────────────────
+
+def _min_dist_to_code(cells_or_grid, y: int, x: int, target_code: int, H: int, W: int, is_grid: bool = False) -> int:
+    """Manhattan distance to nearest cell with target_code. Returns 99 if none found."""
+    best = 99
+    for ny in range(H):
+        for nx in range(W):
+            if is_grid:
+                nc = cells_or_grid[ny][nx]
+            else:
+                nc = cells_or_grid[ny][nx].initial_code
+            if nc == target_code:
+                d = abs(ny - y) + abs(nx - x)
+                if d < best:
+                    best = d
+    return best
+
+
+def _bin_dist_ocean(d: int) -> str:
+    """Bin ocean distance: 0-1, 2-4, 5-10, 11+. Tested: +1.64 pts (18-round LOO)."""
+    if d <= 1:
+        return "od0"
+    if d <= 4:
+        return "od1"
+    if d <= 10:
+        return "od2"
+    return "od3"
+
+
+# Cache for precomputed ocean distance maps per grid id
+_ocean_dist_cache: Dict = {}
+
+
+def _get_ocean_dist_grid(igrid, grid_id=None) -> List[List[int]]:
+    """Compute ocean distance map for an entire grid using BFS (fast)."""
+    if grid_id and grid_id in _ocean_dist_cache:
+        return _ocean_dist_cache[grid_id]
+
+    H, W = len(igrid), len(igrid[0])
+    dist = [[99] * W for _ in range(H)]
+    queue = []
+
+    # Seed BFS from all ocean cells
+    for y in range(H):
+        for x in range(W):
+            if igrid[y][x] == 10:
+                dist[y][x] = 0
+                queue.append((y, x))
+
+    # BFS for Manhattan distance
+    head = 0
+    while head < len(queue):
+        cy, cx = queue[head]
+        head += 1
+        for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            ny, nx = cy + dy, cx + dx
+            if 0 <= ny < H and 0 <= nx < W and dist[ny][nx] > dist[cy][cx] + 1:
+                dist[ny][nx] = dist[cy][cx] + 1
+                queue.append((ny, nx))
+
+    if grid_id:
+        _ocean_dist_cache[grid_id] = dist
+    return dist
+
+
+def cell_context(cells, y: int, x: int, H: int, W: int, ocean_dist_map=None) -> Tuple:
+    """
+    Classify a cell into a context bucket based on its neighbors.
+    Returns: (terrain_code, sett_bin, ocean_bin) for non-Plains
+             (terrain_code, sett_bin, ocean_dist_bin) for Plains (code 11)
+
+    Plains cells get a 4-bin ocean distance feature instead of binary ocean flag.
+    Tested: +1.64 pts improvement on Plains predictions (18-round LOO).
+    """
+    code = cells[y][x].initial_code
+    sett_n = 0
+    ocean_n = 0
+    for dy in range(-2, 3):
+        for dx in range(-2, 3):
+            if dy == 0 and dx == 0:
+                continue
+            ny, nx = y + dy, x + dx
+            if 0 <= ny < H and 0 <= nx < W:
+                nc = cells[ny][nx].initial_code
+                if nc == 1:
+                    sett_n += 1
+                elif nc == 10:
+                    ocean_n += 1
+
+    if sett_n >= 3:
+        sett_bin = "sett_hi"
+    elif sett_n >= 1:
+        sett_bin = "sett_lo"
+    else:
+        sett_bin = "sett_no"
+
+    # Plains cells: use distance-to-ocean (4 bins) instead of binary ocean flag
+    if code == 11 and ocean_dist_map is not None:
+        ocean_bin = _bin_dist_ocean(ocean_dist_map[y][x])
+    else:
+        ocean_bin = "ocean" if ocean_n >= 1 else "inland"
+
+    return (code, sett_bin, ocean_bin)
+
+
+def cell_context_from_grid(igrid, y: int, x: int, ocean_dist_map=None) -> Tuple:
+    """Same as cell_context but works on raw grid (list of lists of ints)."""
+    code = igrid[y][x]
+    H, W = len(igrid), len(igrid[0])
+    sett_n = 0
+    ocean_n = 0
+    for dy in range(-2, 3):
+        for dx in range(-2, 3):
+            if dy == 0 and dx == 0:
+                continue
+            ny, nx = y + dy, x + dx
+            if 0 <= ny < H and 0 <= nx < W:
+                nc = igrid[ny][nx]
+                if nc == 1:
+                    sett_n += 1
+                elif nc == 10:
+                    ocean_n += 1
+
+    if sett_n >= 3:
+        sett_bin = "sett_hi"
+    elif sett_n >= 1:
+        sett_bin = "sett_lo"
+    else:
+        sett_bin = "sett_no"
+
+    # Plains cells: use distance-to-ocean (4 bins) instead of binary ocean flag
+    if code == 11 and ocean_dist_map is not None:
+        ocean_bin = _bin_dist_ocean(ocean_dist_map[y][x])
+    else:
+        ocean_bin = "ocean" if ocean_n >= 1 else "inland"
+
+    return (code, sett_bin, ocean_bin)
+
+
+# ─────────────────────────────────────────────
+# TRANSITION MATRIX LOADERS
 # ─────────────────────────────────────────────
 
 def load_transition_matrix(calibrated: bool = True) -> Dict[int, List[float]]:
     """
-    Load transition matrix. Prefers round_calibrated_matrix.json if available
-    (built from this round's observations). Falls back to historical matrix.
-
-    Args:
-        calibrated: if True, use round-calibrated matrix when available
+    Load flat transition matrix. Used as fallback when conditional matrix
+    doesn't have a matching context bucket.
     """
     # Try calibrated matrix first
     if calibrated:
@@ -96,6 +251,49 @@ def load_transition_matrix(calibrated: bool = True) -> Dict[int, List[float]]:
             matrix[code] = [1.0 / N_CLASSES] * N_CLASSES
 
     print("  Using historical transition matrix (no calibrated matrix found).")
+    return matrix
+
+
+def load_conditional_matrix() -> Dict[Tuple, List[float]]:
+    """
+    Load conditional transition matrix from round_history.
+    Keys are (terrain_code, sett_bin, ocean_bin) tuples.
+    Built from all available historical round data.
+    """
+    history_dir = os.path.join(config.DATA_DIR, "round_history")
+    if not os.path.exists(history_dir):
+        print("  ⚠️  No round_history — conditional matrix empty.")
+        return {}
+
+    files = [f for f in os.listdir(history_dir) if f.endswith("_analysis.json")]
+    if not files:
+        print("  ⚠️  No analysis files in round_history — conditional matrix empty.")
+        return {}
+
+    accum = defaultdict(list)
+    for fname in files:
+        with open(os.path.join(history_dir, fname)) as fh:
+            data = json.load(fh)
+        gt = data.get("ground_truth")
+        igrid = data.get("initial_grid")
+        if not gt or not igrid:
+            continue
+        H, W = len(igrid), len(igrid[0])
+        odm = _get_ocean_dist_grid(igrid, grid_id=fname)
+        for y in range(H):
+            for x in range(W):
+                code = igrid[y][x]
+                if code in STATIC_CODES:
+                    continue
+                ctx = cell_context_from_grid(igrid, y, x, ocean_dist_map=odm)
+                accum[ctx].append(gt[y][x])
+
+    matrix = {}
+    for ctx, samples in accum.items():
+        n = len(samples)
+        matrix[ctx] = [sum(s[i] for s in samples) / n for i in range(N_CLASSES)]
+
+    print(f"  Conditional matrix loaded: {len(matrix)} context buckets from {len(files)} files.")
     return matrix
 
 
@@ -133,71 +331,27 @@ def build_observation_index(observations: List[dict]) -> Dict[Tuple[int,int,int]
 # CORE ESTIMATOR
 # ─────────────────────────────────────────────
 
-def _build_neighbor_maps(seed_map):
-    """Count settlement and ocean neighbors within distance 2 for each dynamic cell."""
-    H, W = seed_map.height, seed_map.width
-    sett_counts = {}
-    ocean_counts = {}
-    for y in range(H):
-        for x in range(W):
-            code = seed_map.cells[y][x].initial_code
-            if code in STATIC_CODES:
-                continue
-            s_count = 0
-            o_count = 0
-            for dy in range(-2, 3):
-                for dx in range(-2, 3):
-                    if dy == 0 and dx == 0:
-                        continue
-                    ny, nx = y + dy, x + dx
-                    if 0 <= ny < H and 0 <= nx < W:
-                        nc = seed_map.cells[ny][nx].initial_code
-                        if nc == 1:
-                            s_count += 1
-                        elif nc == 10:
-                            o_count += 1
-            if s_count > 0:
-                sett_counts[(y, x)] = s_count
-            if o_count > 0:
-                ocean_counts[(y, x)] = o_count
-    return sett_counts, ocean_counts
-
-
-# Neighbor-aware adjustments based on 10-round data analysis:
-#
-# Settlement proximity (Forest/Plains):
-#   Forest near sett: -16.8% Forest, +9.4% Settlement, +7.1% Empty
-#   Plains near sett: -12.4% Empty, +8.8% Settlement
-#   Tested: +0.94 pts with sett+empty boost (10-round LOO)
-SETT_BOOST_PER = 0.01   # per nearby settlement
-SETT_BOOST_MAX = 0.05   # max total
-SETT_BOOST_CODES = {4, 11}  # Forest and Plains
-#
-# Ocean proximity (Forest/Plains/Settlement):
-#   Near ocean: +2.7% Port, -3.8% Settlement (forest), -3.9% Settlement (plains)
-#   Coastal settlements: +1.7% Port
-#   Tested: +1.76 pts with ocean boost alone, +2.65 combined (10-round LOO)
-OCEAN_BOOST_PER = 0.005  # per nearby ocean cell
-OCEAN_BOOST_MAX = 0.03   # max total
-OCEAN_BOOST_CODES = {1, 4, 11}  # Settlement, Forest, Plains
-
-
 def estimate(
     seed_map: SeedMap,
     transition_matrix: Dict[int, List[float]],
     obs_index: Dict[Tuple[int,int,int], List[int]],
     alpha: float = ALPHA,
+    conditional_matrix: Optional[Dict[Tuple, List[float]]] = None,
 ) -> List[List[List[float]]]:
     """
     Build H×W×6 probability tensor for one seed.
+
+    Uses conditional matrix (per-context bucket) when available,
+    falling back to flat transition matrix per terrain code.
 
     Returns: tensor[y][x] = [P(class0), ..., P(class5)] summing to 1.0
     """
     H = seed_map.height
     W = seed_map.width
 
-    # Precompute neighbor counts
-    sett_neighbors, ocean_neighbors = _build_neighbor_maps(seed_map)
+    # Precompute ocean distance map for spatial context (Plains cells)
+    igrid = [[seed_map.cells[y][x].initial_code for x in range(W)] for y in range(H)]
+    odm = _get_ocean_dist_grid(igrid, grid_id=f"seed_{seed_map.seed_index}")
 
     tensor = []
 
@@ -214,37 +368,26 @@ def estimate(
                 dist[pred_class] = 1.0 - (FLOOR_STATIC * (N_CLASSES - 1))
 
             else:
-                # ── LAYER C: transition matrix prior ───────────────
-                prior = transition_matrix.get(code, [1.0/N_CLASSES]*N_CLASSES)[:]
-
-                # ── Settlement neighbor adjustment ─────────────────
-                nc = sett_neighbors.get((y, x), 0)
-                if nc > 0 and code in SETT_BOOST_CODES:
-                    boost = min(nc * SETT_BOOST_PER, SETT_BOOST_MAX)
-                    prior[1] += boost        # class 1 = Settlement (expansion)
-                    prior[0] += boost * 0.7  # class 0 = Empty (resource depletion)
-                    total_p = sum(prior)
-                    prior = [p / total_p for p in prior]
-
-                # ── Ocean neighbor adjustment ──────────────────────
-                oc = ocean_neighbors.get((y, x), 0)
-                if oc > 0 and code in OCEAN_BOOST_CODES:
-                    boost = min(oc * OCEAN_BOOST_PER, OCEAN_BOOST_MAX)
-                    prior[2] += boost  # class 2 = Port
-                    if code in (4, 11):  # suppress settlements near coast
-                        prior[1] = max(prior[1] - boost * 0.5, 0.001)
-                    total_p = sum(prior)
-                    prior = [p / total_p for p in prior]
+                # ── LAYER C: conditional or flat transition prior ──
+                if conditional_matrix:
+                    ctx = cell_context(seed_map.cells, y, x, H, W, ocean_dist_map=odm)
+                    prior = conditional_matrix.get(
+                        ctx,
+                        transition_matrix.get(code, [1.0/N_CLASSES]*N_CLASSES)
+                    )[:]
+                else:
+                    prior = transition_matrix.get(code, [1.0/N_CLASSES]*N_CLASSES)[:]
 
                 # ── LAYER B: Bayesian update if observed ───────────
                 key = (seed_map.seed_index, y, x)
                 if key in obs_index:
                     observed_codes = obs_index[key]
+                    n_obs = len(observed_codes)
                     # Average across multiple observations of same cell
                     avg_one_hot = [0.0] * N_CLASSES
                     for obs_code in observed_codes:
                         obs_class = CODE_TO_CLASS.get(obs_code, 0)
-                        avg_one_hot[obs_class] += 1.0 / len(observed_codes)
+                        avg_one_hot[obs_class] += 1.0 / n_obs
 
                     dist = [
                         (1 - alpha) * prior[i] + alpha * avg_one_hot[i]
@@ -252,6 +395,10 @@ def estimate(
                     ]
                 else:
                     dist = prior[:]
+
+                # Apply temperature scaling (softens predictions to hedge uncertainty)
+                if TEMPERATURE != 1.0:
+                    dist = _apply_temperature(dist, TEMPERATURE)
 
                 # Apply per-terrain floor
                 floor = TERRAIN_FLOOR.get(code, FLOOR_DYNAMIC)
@@ -270,12 +417,15 @@ def estimate_all_seeds(
     seed_maps: List[SeedMap],
     observations: Optional[List[dict]] = None,
     alpha: float = ALPHA,
+    conditional_matrix: Optional[dict] = None,
 ) -> List[List[List[List[float]]]]:
     """
     Build tensors for all 5 seeds.
     Returns: list of 5 tensors, each H×W×6.
     """
     transition_matrix = load_transition_matrix()
+    if conditional_matrix is None:
+        conditional_matrix = load_conditional_matrix()
     obs_index = build_observation_index(observations or [])
 
     n_obs = len(obs_index)
@@ -283,11 +433,11 @@ def estimate_all_seeds(
     print(f"\n  Transition matrix loaded.")
     print(f"  Observations indexed: {n_obs} cells observed "
           f"({n_obs/n_cells*100:.1f}% of {n_cells} total per seed)")
-    print(f"  α = {alpha}  |  floor_dynamic = {FLOOR_DYNAMIC}  |  floor_static = {FLOOR_STATIC}")
+    print(f"  alpha = {alpha}  |  temp = {TEMPERATURE}  |  floor = {FLOOR_DYNAMIC}")
 
     tensors = []
     for sm in seed_maps:
-        tensor = estimate(sm, transition_matrix, obs_index, alpha)
+        tensor = estimate(sm, transition_matrix, obs_index, alpha, conditional_matrix)
         tensors.append(tensor)
         obs_this_seed = sum(
             1 for (s, y, x) in obs_index if s == sm.seed_index

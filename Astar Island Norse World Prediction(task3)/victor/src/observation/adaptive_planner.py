@@ -20,7 +20,8 @@ TILE_W = config.VIEWPORT_MAX_WIDTH    # 15
 TILE_H = config.VIEWPORT_MAX_HEIGHT   # 15
 
 # Spread tiles: corners + centre — maximum spatial diversity (used for Phase 2)
-SPREAD_ANCHORS = [(0, 0), (25, 0), (0, 25), (25, 25), (12, 12)]
+# Shifted inward by 1 to avoid wasting coverage on static ocean border cells
+SPREAD_ANCHORS = [(1, 1), (24, 1), (1, 24), (25, 25), (12, 12)]
 
 PHASE1_QUERIES = 25   # 5 tiles x 5 seeds
 PHASE2_QUERIES = 25   # 5 tiles x 5 seeds
