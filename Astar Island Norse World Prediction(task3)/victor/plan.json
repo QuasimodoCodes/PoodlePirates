@@ -1,0 +1,198 @@
+{
+  "project": "Astar Island — Viking Civilisation Prediction",
+  "constraints": {
+    "TOTAL_QUERIES": 50,
+    "NUM_SEEDS": 5,
+    "QUERIES_PER_SEED": 10,
+    "MAP_WIDTH": 40,
+    "MAP_HEIGHT": 40,
+    "VIEWPORT_MAX": 15,
+    "NUM_TERRAIN_CLASSES": 6,
+    "SIMULATION_YEARS": 50,
+    "TILES_TO_COVER_MAP": 9,
+    "SPARE_QUERIES": 5,
+    "RATE_LIMIT_SIMULATE": "5 req/sec",
+    "SCORING": "score = max(0, min(100, 100 × exp(-3 × weighted_kl)))",
+    "UNIFORM_BASELINE_SCORE": "~1-5 out of 100"
+  },
+  "git_rules": {
+    "working_branch": "victor",
+    "commit_after_each_verified_step": true,
+    "push_to_remote": false,
+    "merge_to_main": "ONLY when score is confirmed better than previous best — ask user before merging"
+  },
+  "leaderboard_strategy": {
+    "rule": "Later rounds may be weighted more heavily on the leaderboard",
+    "implication": "Round 1 is for learning — get a submission in, collect /analysis ground truth, tune the model. Don't sacrifice learning for a marginally better Round 1 score.",
+    "round_1_goal": "Working submission + ground truth collection via /analysis",
+    "round_2_goal": "Apply transition matrix + tuned α → meaningful score improvement",
+    "merge_to_main_rule": "Only when score is verified better than previous best"
+  },
+  "key_insights": {
+    "static_cells": "Mountain (5) and Ocean (10) NEVER change — predict with ~0.99 confidence using initial_states (free)",
+    "initial_states_free": "GET /rounds/{id} gives full initial grid + settlements for all 5 seeds at zero query cost",
+    "ground_truth_is_distribution": "Ground truth is itself a H×W×6 probability tensor from Monte Carlo — we're estimating a distribution not a single outcome",
+    "zero_probability_kills_score": "qᵢ=0 when pᵢ>0 → KL=infinity → always apply 0.01 floor then renormalize",
+    "static_cells_excluded": "Ocean and Mountain have ~zero entropy → excluded from scoring weight — focus budget on dynamic cells",
+    "budget_api": "GET /budget returns queries_used — sync with API before each query"
+  },
+  "steps": [
+    {
+      "step_number": 1,
+      "description": "Project scaffold — config.py, requirements.txt, __init__.py files, folder structure.",
+      "status": "complete",
+      "files": ["config.py", "requirements.txt", "src/**/__init__.py", "data/", "scripts/"]
+    },
+    {
+      "step_number": 2,
+      "description": "Read all API docs — Simulation Mechanics, API Endpoints, Scoring, Quickstart. Fully documented in PROBLEM.md. All terrain types, scoring formula, endpoints, rate limits confirmed.",
+      "status": "complete",
+      "files": ["PROBLEM.md", "config.py"],
+      "key_discoveries": [
+        "8 internal terrain codes → 6 prediction classes (Ocean+Plains+Empty all → class 0)",
+        "Mountain and Ocean are STATIC — deterministic predictions possible from initial_states",
+        "Score formula: max(0, min(100, 100 × exp(-3 × weighted_kl))). Uniform ≈ 1-5/100",
+        "Static cells excluded from scoring weight — focus queries on dynamic zones",
+        "GET /budget endpoint — check remaining queries without tracking locally",
+        "GET /analysis post-round — gives ground truth H×W×6 tensor for learning",
+        "Rate limit: 5 req/sec on simulate"
+      ]
+    },
+    {
+      "step_number": 3,
+      "description": "API client setup — src/api/client.py: typed Session wrapper with Bearer auth, methods for all endpoints (get_rounds, get_round_detail, get_budget, simulate, submit). src/api/models.py: dataclasses for all request/response types.",
+      "status": "complete",
+      "files": ["src/api/client.py", "src/api/models.py"],
+      "note": "No raw requests calls anywhere else in codebase — all HTTP goes through client.py"
+    },
+    {
+      "step_number": 4,
+      "description": "scripts/api_discovery.py — minimal probe script: authenticate, GET /rounds to find active round, GET /rounds/{id} to see initial_states structure, GET /budget to confirm remaining queries. Print all raw responses. Zero simulate calls — costs nothing.",
+      "status": "complete",
+      "files": ["scripts/api_discovery.py"],
+      "budget_impact": "0 queries — no simulate calls, just reading free endpoints",
+      "verify": "Can see round_id, initial grid codes (10/11/0 for ocean/plains/empty, 5 for mountain), settlement list, queries_used"
+    },
+    {
+      "step_number": 5,
+      "description": "Initial state analyzer — src/model/initial_analyzer.py: parse initial_states for all 5 seeds. Classify every cell as: STATIC_MOUNTAIN (code 5), STATIC_OCEAN (code 10), DYNAMIC_SETTLEMENT (code 1 or 2), DYNAMIC_LAND (code 0 or 11), STATIC_FOREST (code 4). Build per-seed 40×40 certainty map.",
+      "status": "complete",
+      "files": ["src/model/initial_analyzer.py"],
+      "why": "Mountain and Ocean = near-certain predictions at zero query cost. Identify EXACTLY which cells need observation budget.",
+      "output": "Per-seed: list of static cells (high confidence), list of dynamic cells (need queries)"
+    },
+    {
+      "step_number": 6,
+      "description": "Query Planner — src/observation/query_planner.py: given dynamic cell map, plan viewport queries. Strategy: 9 non-overlapping 15×15 tiles = full map scan (45 queries), 5 spare queries for re-querying highest-entropy dynamic zones. Assign queries across seeds evenly.",
+      "status": "complete",
+      "files": ["src/observation/query_planner.py"],
+      "math": "Anchors at [0,15,25] for both x and y — NOT [0,15,30]. Each tile is a full 15×15. Tiles at 25 overlap [25-29] with previous tile but guarantee full map coverage. 9×5=45 + 5 spare = 50 exactly.",
+      "why_not_30": "x=30 + w=15 = x=45, out of bounds on a 40-wide map. x=25 + w=15 = x=40, exactly fits.",
+      "future_optimization": "Entropy-guided query placement after initial scan (see features_backlog)"
+    },
+    {
+      "step_number": 7,
+      "description": "Observation Runner — src/observation/runner.py: calls GET /budget first, executes query plan one at a time, saves raw response to data/observations/seed{seed}_x{x}_y{y}_{timestamp}.json after each call. Respects 5 req/sec rate limit with sleep(0.2).",
+      "status": "complete",
+      "files": ["src/observation/runner.py"],
+      "critical": "Save to disk IMMEDIATELY after each query. If crash at query 43, keep all 43. Sync with GET /budget before starting.",
+      "parsing_gotcha": "response.width/height = full map (40×40), NOT viewport size. response.grid shape = viewport_h × viewport_w. Use response.viewport.x and .y to place cells onto the full 40×40 tensor.",
+      "rate_limit": "sleep(0.2) between calls = max 5/sec"
+    },
+    {
+      "step_number": 8,
+      "description": "Data Analysis — scripts/analyze_observations.py: load all saved observations, print terrain frequency per class, print ASCII coverage map, show per-cell observation count, identify highest-variance cells (most uncertain = most important to score well on).",
+      "status": "pending",
+      "files": ["scripts/analyze_observations.py"],
+      "output": "Print: coverage map, terrain distribution, top-10 most uncertain cells"
+    },
+    {
+      "step_number": 9,
+      "description": "Terrain Estimator — src/model/terrain_estimator.py: build per-cell H×W×6 probability distributions using 3 stacked layers. KEY FIX: n=1 observation is NOT treated as an empirical distribution — it is a Bayesian update on the spatial prior.",
+      "status": "complete",
+      "files": ["src/model/terrain_estimator.py"],
+      "n1_problem": "Full scan gives each cell exactly 1 observation per seed. Seeds have different maps — cannot pool across seeds. Treating n=1 as 95% confidence is a delta function, not a distribution. Fix: Bayesian smoothing.",
+      "layers": {
+        "LAYER_A_static": {
+          "what": "Cells classified STATIC from initial_states (Mountain code 5, Ocean code 10)",
+          "Mountain": "predict [1e-5, 1e-5, 1e-5, 1e-5, 1e-5, ~0.99995] — never changes",
+          "Ocean":    "predict [~0.99995, 1e-5, 1e-5, 1e-5, 1e-5, 1e-5] — never changes",
+          "floor": "1e-5 — these cells excluded from scoring weight anyway",
+          "priority": "HIGHEST — overrides everything"
+        },
+        "LAYER_B_bayesian": {
+          "what": "Cells we observed once via simulate() — Bayesian update on spatial prior",
+          "formula": "posterior = (1 - α) × spatial_prior(cell)  +  α × one_hot(observed_class)",
+          "alpha": "α = 0.55 (default) — how much weight to give our single observation vs prior",
+          "alpha_rationale": "With n=1, we trust our observation more than pure prior but acknowledge high uncertainty. Tune this after Round 1 analysis.",
+          "example": "Prior=[0.30,0.20,0.20,0.10,0.15,0.05], observe class 2 (Port) → posterior≈[0.14,0.09,0.56,0.05,0.07,0.02] — Port boosted but real uncertainty remains",
+          "floor": "0.01 floor on all 6 classes, then renormalize",
+          "priority": "MIDDLE — overrides Layer C, overridden by Layer A"
+        },
+        "LAYER_C_spatial_prior": {
+          "what": "Fallback for any unobserved cells (shouldn't exist with full scan, but kept as safety net)",
+          "base": "Global observed terrain frequency across all queries as starting distribution",
+          "rules": [
+            "Adjacent to initial Settlement (code 1): +0.15 P(class1), +0.10 P(class2), +0.08 P(class3) — expansion zone",
+            "Coastal cell + near initial Settlement: +0.20 P(class2 Port) — ports need coast access",
+            "Adjacent to Mountain (code 5): -0.10 P(class1 Settlement) — mountains block expansion",
+            "Distance > 5 cells from ANY initial settlement: +0.15 P(class0), +0.10 P(class4) — frontier stays wild",
+            "Initial Forest (code 4) isolated from settlements: +0.20 P(class4) — forest is mostly static"
+          ],
+          "how": "Apply rules additively. Clip to [0,1]. Apply 0.01 floor. Renormalize.",
+          "also_used_as": "The prior fed into Layer B's Bayesian update — so Layer C always runs first",
+          "priority": "LOWEST — fallback only"
+        }
+      },
+      "order_of_operations": "1. Compute Layer C spatial prior for every cell. 2. For observed cells: Layer B Bayesian update using Layer C as prior. 3. For static cells: override with Layer A. 4. Apply floors. 5. Renormalize.",
+      "tunable_params": {
+        "alpha": "0.55 — controls single-observation confidence. Tune post-Round 1 using learning_log.",
+        "spatial_boost_weights": "The +0.15/+0.10/+0.08 values in Layer C rules — tune from round history.",
+        "floor_dynamic": "0.01 — tune down if scores show we're over-smoothing.",
+        "floor_static": "1e-5 — leave alone."
+      }
+    },
+    {
+      "step_number": 10,
+      "description": "Tensor Builder — src/prediction/tensor_builder.py: assemble H×W×6 numpy array from estimator. Hard assertion: every row sums to 1.0 ± 1e-6 AFTER floor application. Save to data/predictions/seed{seed}_tensor.npy and .json.",
+      "status": "pending",
+      "files": ["src/prediction/tensor_builder.py"]
+    },
+    {
+      "step_number": 11,
+      "description": "main.py — full pipeline orchestration: load config → auth → get round → analyze initial states → plan queries → run observations → estimate terrain → build tensors → submit all 5 seeds. Clear function per stage. Prints budget remaining after every query.",
+      "status": "pending",
+      "files": ["main.py"]
+    },
+    {
+      "step_number": 12,
+      "description": "Submit & Score — POST /submit for all 5 seeds. Record score in data/scores.json. If better than previous best: propose PR victor → main (ask user first). If not: loop back to Step 9.",
+      "status": "pending",
+      "files": ["data/scores.json"],
+      "branch_rule": "No push to remote. No merge to main. PR only when score confirmed better than previous best — always ask user."
+    },
+    {
+      "step_number": 13,
+      "description": "Post-Round Analysis & Learning Log — scripts/post_round_analysis.py: fetch ground truth via GET /analysis, compare cell-by-cell against our predictions, write findings to data/round_history/ and learning_log.md. This is how we improve each round.",
+      "status": "pending",
+      "files": [
+        "scripts/post_round_analysis.py",
+        "data/round_history/round_{id}/prediction_seed{n}.npy",
+        "data/round_history/round_{id}/ground_truth_seed{n}.npy",
+        "data/round_history/round_{id}/per_cell_kl_seed{n}.npy",
+        "data/round_history/round_{id}/summary.json",
+        "learning_log.md"
+      ],
+      "what_to_track": {
+        "per_cell_kl": "Which cells hurt us most? → tells us where Layer C rules are wrong",
+        "per_class_error": "Did we systematically underpredict Ruin? Overpredict Port? → adjust Layer C boosts",
+        "per_initial_code_error": "Cells starting as Settlement → what did they actually become? → builds transition matrix",
+        "alpha_calibration": "Was our α=0.55 too confident or not confident enough? → tune for next round",
+        "regional_patterns": "Are we worse inland vs coastal? Near mountains? → refine spatial rules",
+        "score_history": "Track score per round to see if we're actually improving"
+      },
+      "learning_log_format": "Append one entry per round. Max 5 bullet points per round. Focus on surprises — things that were systematically wrong, not random errors.",
+      "feeds_into": "Round 2: update α and Layer C boost weights. Round 3+: replace Layer C with data-driven transition matrix from accumulated round_history."
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:app.ainm.no)",
+      "Bash(PYTHONIOENCODING=utf-8 python -m scripts.feature_sweep)",
+      "Bash(ls \"c:/Users/Victor/Desktop/PoodlePirates/Astar Island Norse World Prediction\\(task3\\)/victor/data/round_history/\")"
+    ]
+  }
+}
