@@ -121,7 +121,6 @@ def main():
         # Fresh budget — clean stale files and run queries
         stale_files = [
             os.path.join(config.DATA_DIR, "round_calibrated_matrix.json"),
-            os.path.join(config.DATA_DIR, "initial_states.json"),
         ]
         if os.path.exists(obs_dir):
             for f in os.listdir(obs_dir):

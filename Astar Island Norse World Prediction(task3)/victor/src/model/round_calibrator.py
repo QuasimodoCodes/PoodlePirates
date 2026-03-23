@@ -16,11 +16,12 @@ from typing import Dict, List, Tuple
 
 import config
 from src.model.initial_analyzer import CODE_TO_CLASS, STATIC_CODES
-from src.model.terrain_estimator import cell_context_from_grid, _get_ocean_dist_grid
+from src.model.terrain_estimator import cell_context_from_grid, _get_ocean_dist_grid, _get_sett_dist_grid
 
 N_CLASSES    = config.NUM_TERRAIN_CLASSES
 N_HIST       = 50    # virtual historical sample weight — lower = trust round obs more
-N_HIST_SURPRISED = 5  # N_HIST for context buckets with surprise > threshold
+N_HIST_SURPRISED = 20  # N_HIST for context buckets with surprise > threshold
+                       # Tested: 5->20 = +1.16 pts (21-round LOO, 5 seeds consistent)
 SURPRISE_THRESHOLD = 0.30  # symmetric KL threshold for "surprised" bucket
 CLASS_NAMES  = ["Empty", "Settl", "Port", "Ruin", "Forest", "Mtn"]
 CODE_NAMES   = {0: "Empty", 1: "Settlement", 2: "Port", 3: "Ruin",
@@ -203,6 +204,7 @@ def calibrate(
         igrid = seed_state["grid"]
         H, W  = len(igrid), len(igrid[0])
         odm = _get_ocean_dist_grid(igrid, grid_id=f"cal_seed_{seed_idx}")
+        sdm = _get_sett_dist_grid(igrid, grid_id=f"cal_seed_{seed_idx}")
         for y in range(H):
             for x in range(W):
                 init_code = igrid[y][x]
@@ -213,7 +215,7 @@ def calibrate(
                     obs_class = CODE_TO_CLASS.get(obs_code, 0)
                     round_counts[init_code].append(obs_class)
                     if conditional_matrix is not None:
-                        ctx = cell_context_from_grid(igrid, y, x, ocean_dist_map=odm)
+                        ctx = cell_context_from_grid(igrid, y, x, ocean_dist_map=odm, sett_dist_map=sdm)
                         round_counts_ctx[ctx].append(obs_class)
 
     n_hist = N_HIST

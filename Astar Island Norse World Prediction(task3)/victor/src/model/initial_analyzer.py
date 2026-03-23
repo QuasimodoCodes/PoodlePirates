@@ -107,10 +107,14 @@ def fetch_and_save(client, round_id: str) -> RoundDetail:
     save_path = os.path.join(config.DATA_DIR, "initial_states.json")
 
     if os.path.exists(save_path):
-        print(f"  Loading initial states from disk: {save_path}")
-        with open(save_path) as f:
-            raw = json.load(f)
-        return raw  # raw dict, not RoundDetail — caller uses build_seed_maps()
+        try:
+            with open(save_path) as f:
+                raw = json.load(f)
+            if raw.get("round_id") == round_id:
+                print(f"  Loading initial states from disk: {save_path}")
+                return raw
+        except Exception:
+            pass
 
     print(f"  Fetching initial states from API (free)...")
     detail = client.get_round_detail(round_id)
